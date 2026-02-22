@@ -58,7 +58,7 @@ class OpenClawBridgeServer extends AppServer {
       return;
     }
 
-    session.layouts.showTextWall("Connected.");
+    session.layouts.showTextWall("Welcome. Speak your prompt, then say Send, Execute, Mac, or Jarvis when ready.");
 
     let busy = false;
     let buffer = "";
@@ -150,7 +150,7 @@ class OpenClawBridgeServer extends AppServer {
       const display = withInterim && withInterim.length > TRANSCRIPT_DISPLAY_MAX_CHARS
         ? withInterim.slice(-TRANSCRIPT_DISPLAY_MAX_CHARS)
         : withInterim;
-      session.layouts.showTextWall(display || "Connected.");
+      session.layouts.showTextWall(display || "Welcome. Speak your prompt, then say Send, Execute, Mac, or Jarvis when ready.");
       lastTranscriptDisplayTime = Date.now();
     };
 
