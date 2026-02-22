@@ -1,6 +1,10 @@
 import "dotenv/config";
 import { AppServer, AppSession } from "@mentra/sdk";
 import {
+  createG1Toolkit,
+  ScrollView,
+} from "@mentra/sdk/display-utils";
+import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
 } from "./openclaw.js";
@@ -9,22 +13,20 @@ const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-br
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 
-/** Throttle display updates to respect Mentra ~1 update per 200ms. */
-const DISPLAY_THROTTLE_MS = 250;
+/** Throttle display updates - reduced for snappier feel. */
+const DISPLAY_THROTTLE_MS = 100;
 
-/** Max characters to keep in the in-memory transcript log. */
-const TRANSCRIPT_LOG_MAX_CHARS = 2000;
-/** Max characters to show on the glasses (tail of log so newest is visible). */
-const TRANSCRIPT_DISPLAY_MAX_CHARS = 500;
+/** G1 display constants from SDK */
+const G1_MAX_LINES = 5;
 
-/** Trigger phrases (longer first so "jarvis" matches before "mac"). From env OPENCLAW_TRIGGER_WORDS (comma-separated) or default. */
+/** Trigger phrases (longer first). From env or defaults. */
 const TRIGGER_WORDS: string[] = (() => {
   const raw = process.env.OPENCLAW_TRIGGER_WORDS ?? "mac,jarvis,send,execute";
   const list = raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
   return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["mac", "jarvis", "send", "execute"];
 })();
 
-/** Phrases that clear the transcript (e.g. "clear"). Case-insensitive; "Clear" or "clear" both work. From env OPENCLAW_CLEAR_WORDS (comma-separated) or default. */
+/** Clear phrases. From env or defaults. */
 const CLEAR_WORDS: string[] = (() => {
   const raw = process.env.OPENCLAW_CLEAR_WORDS ?? "clear";
   return raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
@@ -35,9 +37,17 @@ if (!MENTRAOS_API_KEY) {
   process.exit(1);
 }
 
+/** Session state machine */
+enum SessionState {
+  IDLE = "IDLE",
+  DICTATING = "DICTATING",
+  SENDING = "SENDING",
+  STREAMING = "STREAMING",
+}
+
 /**
- * OpenClawBridgeServer – MentraOS app that connects Even G1 glasses to OpenClaw.
- * Voice (final transcription) → OpenClaw; streaming response → TextWall (throttled).
+ * OpenClawBridgeServer - Production-grade MentraOS app connecting Even G1 glasses to OpenClaw.
+ * Uses SDK ScrollView for proper text wrapping and auto-scrolling.
  */
 class OpenClawBridgeServer extends AppServer {
   protected async onSession(
@@ -50,7 +60,7 @@ class OpenClawBridgeServer extends AppServer {
     const openclawConfig = getOpenClawConfigFromEnv();
     if (!openclawConfig) {
       session.layouts.showTextWall(
-        "Mentra connected. You should see this on your glasses."
+        "Mentra connected. OpenClaw not configured."
       );
       session.events.onDisconnected(() => {
         session.logger.info(`Session ${sessionId} disconnected.`);
@@ -58,272 +68,303 @@ class OpenClawBridgeServer extends AppServer {
       return;
     }
 
-    session.layouts.showTextWall("Welcome. Speak your prompt, then say Send, Execute, Mac, or Jarvis when ready.");
+    // Initialize G1 display toolkit for proper text wrapping
+    const toolkit = createG1Toolkit();
+    const { wrapper, measurer } = toolkit;
 
-    let busy = false;
-    let buffer = "";
+    // ScrollView for transcript (dictation input)
+    const transcriptView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
+    // ScrollView for response (OpenClaw output)
+    const responseView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
+
+    // State machine
+    let state: SessionState = SessionState.IDLE;
     let lastDisplayTime = 0;
-    let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+    let displayTimer: ReturnType<typeof setTimeout> | null = null;
 
-    /** Session transcript: all dictated final segments (capped in total length). */
+    // Transcript segments for building the prompt
     let transcriptSegments: string[] = [];
-    let transcriptTotalChars = 0;
-    let lastTranscriptDisplayTime = 0;
-    let transcriptThrottleTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Live interim text (not yet final) so words appear as they are spoken. */
+
+    // Current interim text (not yet final)
     let currentInterim = "";
-    /** True if we just sent from interim so we don't send again when the same phrase is finalized. */
-    let sentFromInterim = false;
 
-    const appendToTranscript = (text: string) => {
-      if (text.length === 0) return;
-      transcriptSegments.push(text);
-      transcriptTotalChars += text.length;
-      while (transcriptTotalChars > TRANSCRIPT_LOG_MAX_CHARS && transcriptSegments.length > 0) {
-        const removed = transcriptSegments.shift()!;
-        transcriptTotalChars -= removed.length;
-      }
+    // Track if we triggered from interim to skip the matching final
+    let lastInterimTriggerText = "";
+
+    // Response buffer for streaming
+    let responseBuffer = "";
+
+    const WELCOME_MESSAGE = "Speak your prompt. Say Send, Execute, Mac, or Jarvis when ready.";
+
+    /** Display welcome message */
+    const showWelcome = () => {
+      transcriptView.setContent(WELCOME_MESSAGE);
+      displayViewport(transcriptView);
     };
 
-    const getTranscriptTail = (): string => {
-      const full = transcriptSegments.join(" ");
-      return full.length <= TRANSCRIPT_DISPLAY_MAX_CHARS ? full : full.slice(-TRANSCRIPT_DISPLAY_MAX_CHARS);
+    /** Display a ScrollView's current viewport on glasses */
+    const displayViewport = (view: ScrollView) => {
+      const viewport = view.getViewport();
+      const text = viewport.lines.join("\n");
+      session.layouts.showTextWall(text, { durationMs: -1 });
+      lastDisplayTime = Date.now();
     };
 
-    /** Returns the matched trigger phrase if segment equals, ends with, or starts with one (case-insensitive; transcription often capitalizes). */
-    const getTriggerMatch = (segment: string): string | null => {
-      const s = segment.trim().toLowerCase();
-      if (!s) return null;
-      for (const trigger of TRIGGER_WORDS) {
-        if (s === trigger || s.endsWith(" " + trigger) || s.startsWith(trigger + " ")) return trigger;
-      }
-      return null;
-    };
-
-    /** Returns segment text with the trigger removed (from end, start, or whole). Case-insensitive: uses lowercased segment for detection, original for slicing. */
-    const segmentWithoutTrigger = (segment: string, trigger: string): string => {
-      const s = segment.trim().toLowerCase();
-      if (s === trigger) return "";
-      if (s.endsWith(" " + trigger)) return segment.trim().slice(0, -(trigger.length + 1)).trim();
-      if (s.startsWith(trigger + " ")) return segment.trim().slice(trigger.length + 1).trim();
-      return segment.trim();
-    };
-
-    const hasTrigger = (segment: string): boolean => getTriggerMatch(segment) !== null;
-
-    /** True if segment equals or ends with a clear phrase (e.g. "clear"). Case-insensitive so "Clear" from transcription clears. */
-    const isClearCommand = (segment: string): boolean => {
-      const s = segment.trim().toLowerCase();
-      if (!s) return false;
-      return CLEAR_WORDS.some((c) => s === c || s.endsWith(" " + c));
-    };
-
-    const clearTranscript = () => {
-      transcriptSegments = [];
-      transcriptTotalChars = 0;
-      currentInterim = "";
-    };
-
-    /** Build payload (transcript with trigger stripped from segment), clear transcript, return payload. */
-    const getPayloadAndClear = (segment: string): string => {
-      const trigger = getTriggerMatch(segment);
-      if (!trigger) {
-        transcriptSegments = [];
-        transcriptTotalChars = 0;
-        return "";
-      }
-      const beforeLast = transcriptSegments.slice(0, -1).join(" ").trim();
-      const lastPart = segmentWithoutTrigger(
-        transcriptSegments.length > 0 ? transcriptSegments[transcriptSegments.length - 1]! : "",
-        trigger
-      );
-      transcriptSegments = [];
-      transcriptTotalChars = 0;
-      const payload = [beforeLast, lastPart].filter(Boolean).join(" ").trim();
-      return payload;
-    };
-
-    const showTranscriptOnWall = () => {
-      if (busy) return;
-      const tail = getTranscriptTail();
-      const withInterim = currentInterim ? (tail ? `${tail} ${currentInterim}` : currentInterim) : tail;
-      const display = withInterim && withInterim.length > TRANSCRIPT_DISPLAY_MAX_CHARS
-        ? withInterim.slice(-TRANSCRIPT_DISPLAY_MAX_CHARS)
-        : withInterim;
-      session.layouts.showTextWall(display || "Welcome. Speak your prompt, then say Send, Execute, Mac, or Jarvis when ready.");
-      lastTranscriptDisplayTime = Date.now();
-    };
-
-    const scheduleThrottledTranscriptDisplay = () => {
-      if (transcriptThrottleTimer !== null) return;
-      if (busy) return;
-      const elapsed = Date.now() - lastTranscriptDisplayTime;
+    /** Throttled display update */
+    const scheduleDisplay = (view: ScrollView) => {
+      if (displayTimer !== null) return;
+      const elapsed = Date.now() - lastDisplayTime;
       if (elapsed >= DISPLAY_THROTTLE_MS) {
-        showTranscriptOnWall();
-        transcriptThrottleTimer = null;
+        displayViewport(view);
       } else {
-        transcriptThrottleTimer = setTimeout(() => {
-          showTranscriptOnWall();
-          transcriptThrottleTimer = null;
+        displayTimer = setTimeout(() => {
+          displayViewport(view);
+          displayTimer = null;
         }, DISPLAY_THROTTLE_MS - elapsed);
       }
     };
 
-    const flushDisplay = () => {
-      if (buffer.length > 0) {
-        session.layouts.showTextWall(buffer);
-        lastDisplayTime = Date.now();
+    /** Force immediate display */
+    const flushDisplay = (view: ScrollView) => {
+      if (displayTimer) {
+        clearTimeout(displayTimer);
+        displayTimer = null;
       }
-      throttleTimer = null;
+      displayViewport(view);
     };
 
-    const scheduleThrottledDisplay = () => {
-      if (throttleTimer !== null) return;
-      const elapsed = Date.now() - lastDisplayTime;
-      if (elapsed >= DISPLAY_THROTTLE_MS) {
-        flushDisplay();
-      } else {
-        throttleTimer = setTimeout(flushDisplay, DISPLAY_THROTTLE_MS - elapsed);
+    /** Build display text from transcript segments + interim */
+    const buildTranscriptDisplay = (): string => {
+      const final = transcriptSegments.join(" ").trim();
+      if (currentInterim) {
+        return final ? `${final} ${currentInterim}` : currentInterim;
       }
+      return final || WELCOME_MESSAGE;
     };
 
-    const sendToOpenClaw = (userText: string) => {
-      if (busy) {
-        session.layouts.showTextWall("Busy. Wait for the current response.");
+    /** Update transcript display */
+    const updateTranscriptDisplay = () => {
+      if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
+      transcriptView.setContent(buildTranscriptDisplay());
+      transcriptView.scrollToBottom();
+      scheduleDisplay(transcriptView);
+    };
+
+    /** Get trigger match from text (case-insensitive) */
+    const getTriggerMatch = (text: string): string | null => {
+      const s = text.trim().toLowerCase();
+      if (!s) return null;
+      for (const trigger of TRIGGER_WORDS) {
+        // Match if text equals, ends with, or starts with the trigger
+        if (s === trigger || s.endsWith(" " + trigger) || s.startsWith(trigger + " ")) {
+          return trigger;
+        }
+      }
+      return null;
+    };
+
+    /** Strip trigger word from text */
+    const stripTrigger = (text: string, trigger: string): string => {
+      const s = text.trim().toLowerCase();
+      const original = text.trim();
+      if (s === trigger) return "";
+      if (s.endsWith(" " + trigger)) {
+        return original.slice(0, -(trigger.length + 1)).trim();
+      }
+      if (s.startsWith(trigger + " ")) {
+        return original.slice(trigger.length + 1).trim();
+      }
+      return original;
+    };
+
+    /** Check if text is a clear command */
+    const isClearCommand = (text: string): boolean => {
+      const s = text.trim().toLowerCase();
+      return CLEAR_WORDS.some((c) => s === c || s.endsWith(" " + c));
+    };
+
+    /** Clear transcript and reset to idle */
+    const clearTranscript = () => {
+      transcriptSegments = [];
+      currentInterim = "";
+      lastInterimTriggerText = "";
+      state = SessionState.IDLE;
+      transcriptView.clear();
+      session.layouts.showTextWall("Cleared.", { durationMs: 1500 });
+      setTimeout(showWelcome, 1500);
+    };
+
+    /** Build prompt payload from transcript */
+    const buildPayload = (finalSegment: string | null, trigger: string): string => {
+      const parts = [...transcriptSegments];
+      if (finalSegment) {
+        parts.push(stripTrigger(finalSegment, trigger));
+      }
+      return parts.join(" ").trim();
+    };
+
+    /** Send prompt to OpenClaw */
+    const sendToOpenClaw = (prompt: string) => {
+      if (state === SessionState.SENDING || state === SessionState.STREAMING) {
+        session.logger.warn("Ignoring send - already processing");
         return;
       }
-      busy = true;
-      buffer = "";
-      lastDisplayTime = 0;
-      if (throttleTimer) {
-        clearTimeout(throttleTimer);
-        throttleTimer = null;
+
+      if (!prompt) {
+        session.logger.warn("Empty prompt, ignoring");
+        updateTranscriptDisplay();
+        return;
       }
-      session.layouts.showTextWall("Thinking...");
+
+      state = SessionState.SENDING;
+      transcriptSegments = [];
+      currentInterim = "";
+      lastInterimTriggerText = "";
+      responseBuffer = "";
+      responseView.clear();
+
+      session.layouts.showTextWall("Thinking...", { durationMs: -1 });
 
       const openclawUrl = `${openclawConfig.baseUrl.replace(/\/$/, "")}/v1/responses`;
       session.logger.info(
-        `Sending to OpenClaw: ${openclawUrl} text="${userText.slice(0, 50)}${userText.length > 50 ? "..." : ""}"`
+        `Sending to OpenClaw: ${openclawUrl} prompt="${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}"`
       );
 
       streamOpenClawResponse(
         openclawConfig,
-        userText,
+        prompt,
         {
           onDelta: (delta) => {
-            const wasEmpty = buffer.length === 0;
-            buffer += delta;
-            if (wasEmpty) {
-              flushDisplay();
-            } else {
-              scheduleThrottledDisplay();
+            if (state !== SessionState.STREAMING) {
+              state = SessionState.STREAMING;
             }
+            responseBuffer += delta;
+            // Use appendContent for streaming with auto-scroll
+            responseView.setContent(responseBuffer);
+            responseView.scrollToBottom();
+            scheduleDisplay(responseView);
           },
           onDone: () => {
-            flushDisplay();
+            flushDisplay(responseView);
           },
           onCompleted: () => {
-            if (buffer.length === 0) {
-              session.layouts.showTextWall("Done.");
+            if (responseBuffer.length === 0) {
+              session.layouts.showTextWall("Done.", { durationMs: 2000 });
             } else {
-              session.layouts.showTextWall(buffer);
+              flushDisplay(responseView);
             }
-            buffer = "";
-            busy = false;
-            if (throttleTimer) {
-              clearTimeout(throttleTimer);
-              throttleTimer = null;
-            }
-            showTranscriptOnWall();
+            // Hold response on screen for a moment before returning to idle
+            setTimeout(() => {
+              state = SessionState.IDLE;
+              responseBuffer = "";
+              showWelcome();
+            }, 3000);
           },
           onFailed: (err) => {
             const message = err instanceof Error ? err.message : String(err);
-            session.layouts.showTextWall(`OpenClaw error: ${message.slice(0, 80)}`);
+            session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
             session.logger.error(
               { err: err instanceof Error ? err.stack : String(err) },
               "OpenClaw request failed"
             );
-            buffer = "";
-            busy = false;
-            if (throttleTimer) {
-              clearTimeout(throttleTimer);
-              throttleTimer = null;
-            }
-            showTranscriptOnWall();
+            setTimeout(() => {
+              state = SessionState.IDLE;
+              responseBuffer = "";
+              showWelcome();
+            }, 5000);
           },
         },
         { user: userId }
       );
     };
 
-    /** Build payload from current transcript + segment (with trigger stripped), clear, and return payload. Does not append segment. */
-    const getPayloadAndClearFromInterim = (segment: string): string => {
-      const trigger = getTriggerMatch(segment);
-      if (!trigger) return "";
-      const transcriptSoFar = transcriptSegments.join(" ").trim();
-      const segmentPart = segmentWithoutTrigger(segment, trigger);
-      const payload = [transcriptSoFar, segmentPart].filter(Boolean).join(" ").trim();
-      clearTranscript();
-      return payload;
-    };
+    // Show welcome on connect
+    showWelcome();
 
+    // Handle transcription events
     const unsubTranscription = session.events.onTranscription((data) => {
       const text = data.text?.trim() ?? "";
 
-      if (!data.isFinal) {
-        currentInterim = text;
-        const trigger = getTriggerMatch(text);
-        if (trigger && !busy) {
-          const payload = getPayloadAndClearFromInterim(text);
-          currentInterim = "";
-          if (payload.length > 0) {
-            sentFromInterim = true;
-            sendToOpenClaw(payload);
-          }
-        } else {
-          scheduleThrottledTranscriptDisplay();
-        }
+      // Ignore transcription while sending/streaming
+      if (state === SessionState.SENDING || state === SessionState.STREAMING) {
         return;
       }
 
-      currentInterim = "";
-      if (text.length === 0) return;
-      session.logger.info(`Final transcription received: ${text}`);
+      if (!data.isFinal) {
+        // Interim transcription
+        currentInterim = text;
 
+        // Check for trigger in interim for faster response
+        const trigger = getTriggerMatch(text);
+        if (trigger) {
+          // Build payload from existing segments + this interim (minus trigger)
+          const payload = buildPayload(text, trigger);
+          if (payload) {
+            // Remember this text so we skip the matching final
+            lastInterimTriggerText = text.toLowerCase().trim();
+            currentInterim = "";
+            sendToOpenClaw(payload);
+            return;
+          }
+        }
+
+        // No trigger, just update display with interim
+        if (state === SessionState.IDLE) {
+          state = SessionState.DICTATING;
+        }
+        updateTranscriptDisplay();
+        return;
+      }
+
+      // Final transcription
+      currentInterim = "";
+
+      if (!text) return;
+
+      session.logger.info(`Final transcription: ${text}`);
+
+      // Check if this is the final version of an interim we already triggered on
+      const normalizedText = text.toLowerCase().trim();
+      if (lastInterimTriggerText && normalizedText.includes(lastInterimTriggerText.slice(0, 10))) {
+        // This final matches the interim we already sent from - skip it
+        session.logger.info("Skipping final - already triggered from interim");
+        lastInterimTriggerText = "";
+        return;
+      }
+      lastInterimTriggerText = "";
+
+      // Check for clear command
       if (isClearCommand(text)) {
         clearTranscript();
-        session.layouts.showTextWall("Cleared.");
         return;
       }
 
-      appendToTranscript(text);
-
-      if (hasTrigger(text)) {
-        if (sentFromInterim) {
-          sentFromInterim = false;
-          clearTranscript();
-          scheduleThrottledTranscriptDisplay();
-        } else if (!busy) {
-          const payload = getPayloadAndClear(text);
-          if (payload.length > 0) {
-            sendToOpenClaw(payload);
-          } else {
-            scheduleThrottledTranscriptDisplay();
-          }
+      // Check for trigger in final
+      const trigger = getTriggerMatch(text);
+      if (trigger) {
+        const payload = buildPayload(text, trigger);
+        if (payload) {
+          sendToOpenClaw(payload);
         } else {
-          session.layouts.showTextWall("Busy. Wait for the current response.");
+          // Trigger word only, no content - show hint
+          session.layouts.showTextWall("Say something before the trigger word.", { durationMs: 2000 });
+          setTimeout(showWelcome, 2000);
         }
-      } else {
-        sentFromInterim = false;
-        scheduleThrottledTranscriptDisplay();
+        return;
       }
+
+      // No trigger - accumulate segment
+      if (state === SessionState.IDLE) {
+        state = SessionState.DICTATING;
+      }
+      transcriptSegments.push(text);
+      updateTranscriptDisplay();
     });
 
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
-      if (throttleTimer) clearTimeout(throttleTimer);
-      if (transcriptThrottleTimer) clearTimeout(transcriptThrottleTimer);
+      if (displayTimer) clearTimeout(displayTimer);
     });
   }
 }
