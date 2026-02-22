@@ -12,6 +12,18 @@ const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 /** Throttle display updates to respect Mentra ~1 update per 200ms. */
 const DISPLAY_THROTTLE_MS = 250;
 
+/** Max characters to keep in the in-memory transcript log. */
+const TRANSCRIPT_LOG_MAX_CHARS = 2000;
+/** Max characters to show on the glasses (tail of log so newest is visible). */
+const TRANSCRIPT_DISPLAY_MAX_CHARS = 500;
+
+/** Trigger phrases (longer first so "big mac" matches before "mac"). From env OPENCLAW_TRIGGER_WORDS (comma-separated) or default. */
+const TRIGGER_WORDS: string[] = (() => {
+  const raw = process.env.OPENCLAW_TRIGGER_WORDS ?? "go,send,execute,big mac";
+  const list = raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
+  return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["go", "send", "execute", "big mac"].sort((a, b) => b.length - a.length);
+})();
+
 if (!MENTRAOS_API_KEY) {
   console.error("MENTRAOS_API_KEY environment variable is required");
   process.exit(1);
@@ -40,12 +52,99 @@ class OpenClawBridgeServer extends AppServer {
       return;
     }
 
-    session.layouts.showTextWall("Connected. Say something or press the button.");
+    const triggerHint = TRIGGER_WORDS[0] ? ` Say "${TRIGGER_WORDS[0]}" to send.` : "";
+    session.layouts.showTextWall("Connected." + triggerHint);
 
     let busy = false;
     let buffer = "";
     let lastDisplayTime = 0;
     let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    /** Session transcript: all dictated final segments (capped in total length). */
+    let transcriptSegments: string[] = [];
+    let transcriptTotalChars = 0;
+    let lastTranscriptDisplayTime = 0;
+    let transcriptThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const appendToTranscript = (text: string) => {
+      if (text.length === 0) return;
+      transcriptSegments.push(text);
+      transcriptTotalChars += text.length;
+      while (transcriptTotalChars > TRANSCRIPT_LOG_MAX_CHARS && transcriptSegments.length > 0) {
+        const removed = transcriptSegments.shift()!;
+        transcriptTotalChars -= removed.length;
+      }
+    };
+
+    const getTranscriptTail = (): string => {
+      const full = transcriptSegments.join(" ");
+      return full.length <= TRANSCRIPT_DISPLAY_MAX_CHARS ? full : full.slice(-TRANSCRIPT_DISPLAY_MAX_CHARS);
+    };
+
+    /** Returns the matched trigger phrase (trimmed lower) if segment equals or ends with one; longer triggers first. */
+    const getTriggerMatch = (segment: string): string | null => {
+      const s = segment.trim().toLowerCase();
+      if (!s) return null;
+      for (const trigger of TRIGGER_WORDS) {
+        if (s === trigger || s.endsWith(" " + trigger)) return trigger;
+      }
+      return null;
+    };
+
+    const endsWithTrigger = (segment: string): boolean => getTriggerMatch(segment) !== null;
+
+    /** Build payload (transcript with trigger stripped from end), clear transcript, return payload. */
+    const getPayloadAndClear = (segment: string): string => {
+      const trigger = getTriggerMatch(segment);
+      if (!trigger || transcriptSegments.length === 0) {
+        transcriptSegments = [];
+        transcriptTotalChars = 0;
+        return "";
+      }
+
+      const last = transcriptSegments[transcriptSegments.length - 1];
+      const lastTrimmed = last.trim().toLowerCase();
+      let beforeLast: string;
+      let lastPart: string;
+      if (lastTrimmed === trigger) {
+        beforeLast = transcriptSegments.slice(0, -1).join(" ").trim();
+        lastPart = "";
+      } else if (lastTrimmed.endsWith(" " + trigger)) {
+        const trimmedLast = last.trim();
+        const suffix = " " + trigger;
+        lastPart = trimmedLast.slice(0, -suffix.length).trim();
+        beforeLast = transcriptSegments.slice(0, -1).join(" ").trim();
+      } else {
+        beforeLast = transcriptSegments.join(" ").trim();
+        lastPart = "";
+      }
+      transcriptSegments = [];
+      transcriptTotalChars = 0;
+      return beforeLast ? (lastPart ? `${beforeLast} ${lastPart}` : beforeLast) : lastPart;
+    };
+
+    const showTranscriptOnWall = () => {
+      if (busy) return;
+      const tail = getTranscriptTail();
+      const hint = TRIGGER_WORDS[0] ? ` Say "${TRIGGER_WORDS[0]}" to send.` : "";
+      session.layouts.showTextWall(tail ? tail + hint : "Connected." + hint);
+      lastTranscriptDisplayTime = Date.now();
+    };
+
+    const scheduleThrottledTranscriptDisplay = () => {
+      if (transcriptThrottleTimer !== null) return;
+      if (busy) return;
+      const elapsed = Date.now() - lastTranscriptDisplayTime;
+      if (elapsed >= DISPLAY_THROTTLE_MS) {
+        showTranscriptOnWall();
+        transcriptThrottleTimer = null;
+      } else {
+        transcriptThrottleTimer = setTimeout(() => {
+          showTranscriptOnWall();
+          transcriptThrottleTimer = null;
+        }, DISPLAY_THROTTLE_MS - elapsed);
+      }
+    };
 
     const flushDisplay = () => {
       if (buffer.length > 0) {
@@ -112,6 +211,7 @@ class OpenClawBridgeServer extends AppServer {
               clearTimeout(throttleTimer);
               throttleTimer = null;
             }
+            showTranscriptOnWall();
           },
           onFailed: (err) => {
             const message = err instanceof Error ? err.message : String(err);
@@ -126,6 +226,7 @@ class OpenClawBridgeServer extends AppServer {
               clearTimeout(throttleTimer);
               throttleTimer = null;
             }
+            showTranscriptOnWall();
           },
         },
         { user: userId }
@@ -135,9 +236,23 @@ class OpenClawBridgeServer extends AppServer {
     const unsubTranscription = session.events.onTranscription((data) => {
       if (!data.isFinal) return;
       const text = data.text?.trim() ?? "";
-      if (text.length > 0) {
-        session.logger.info(`Final transcription received: ${text}`);
-        sendToOpenClaw(text);
+      if (text.length === 0) return;
+      session.logger.info(`Final transcription received: ${text}`);
+      appendToTranscript(text);
+
+      if (endsWithTrigger(text)) {
+        if (!busy) {
+          const payload = getPayloadAndClear(text);
+          if (payload.length > 0) {
+            sendToOpenClaw(payload);
+          } else {
+            scheduleThrottledTranscriptDisplay();
+          }
+        } else {
+          session.layouts.showTextWall("Busy. Wait for the current response.");
+        }
+      } else {
+        scheduleThrottledTranscriptDisplay();
       }
     });
 
@@ -145,6 +260,7 @@ class OpenClawBridgeServer extends AppServer {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
       if (throttleTimer) clearTimeout(throttleTimer);
+      if (transcriptThrottleTimer) clearTimeout(transcriptThrottleTimer);
     });
   }
 }

@@ -57,6 +57,7 @@ cp .env.example .env
 | `OPENCLAW_GATEWAY_URL` | OpenClaw gateway base URL (e.g. `http://127.0.0.1:18789`) |
 | `OPENCLAW_GATEWAY_TOKEN` | Bearer token for the gateway |
 | `OPENCLAW_AGENT_ID` | Optional; agent id (default `main`) |
+| `OPENCLAW_TRIGGER_WORDS` | Optional; comma-separated trigger phrases to send the transcript to OpenClaw (e.g. `go,send,execute,big mac`). Dictation is only sent when you say one of these. |
 
 ### 3. MentraOS (glasses) side
 
