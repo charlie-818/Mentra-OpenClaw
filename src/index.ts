@@ -42,13 +42,12 @@ if (!MENTRAOS_API_KEY) {
 
 /**
  * Strip markdown formatting from text for plain text display on glasses.
- * Handles headers, bold, italic, code, links, lists, etc.
+ * Preserves paragraph structure for readability while removing formatting.
  */
 function stripMarkdown(text: string): string {
   return text
-    // Remove code blocks (``` ... ```)
+    // Remove code blocks (``` ... ```) - keep just the code content
     .replace(/```[\s\S]*?```/g, (match) => {
-      // Extract just the code content without the backticks and language identifier
       const lines = match.split("\n");
       return lines.slice(1, -1).join("\n");
     })
@@ -59,7 +58,7 @@ function stripMarkdown(text: string): string {
     // Remove bold (**text** or __text__)
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
-    // Remove italic (*text* or _text_) - be careful not to match bullet points
+    // Remove italic (*text* or _text_) - careful not to match bullet points
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1")
     .replace(/(?<!_)_([^_]+)_(?!_)/g, "$1")
     // Remove strikethrough (~~text~~)
@@ -70,13 +69,17 @@ function stripMarkdown(text: string): string {
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
     // Remove horizontal rules (---, ***, ___)
     .replace(/^[-*_]{3,}$/gm, "")
-    // Convert bullet points to simple dash
+    // Simplify bullet points
     .replace(/^[\s]*[-*+]\s+/gm, "- ")
-    // Convert numbered lists to simple format
-    .replace(/^[\s]*\d+\.\s+/gm, "")
+    // Simplify numbered lists (1. or 1)) - keep the number for readability
+    .replace(/^[\s]*(\d+)[.)]\s+/gm, "$1. ")
     // Remove blockquotes (> text)
     .replace(/^>\s+/gm, "")
-    // Clean up multiple newlines
+    // Remove markdown line breaks (trailing double space)
+    .replace(/  +$/gm, "")
+    // Clean up multiple spaces
+    .replace(/ {2,}/g, " ")
+    // Normalize line endings - keep single and double newlines for structure
     .replace(/\n{3,}/g, "\n\n")
     // Trim whitespace
     .trim();
