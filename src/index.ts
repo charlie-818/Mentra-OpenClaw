@@ -24,7 +24,7 @@ const TRIGGER_WORDS: string[] = (() => {
   return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["mac", "jarvis", "send", "execute"];
 })();
 
-/** Phrases that clear the transcript from view (e.g. "clear"). From env OPENCLAW_CLEAR_WORDS (comma-separated) or default. */
+/** Phrases that clear the transcript (e.g. "clear"). Case-insensitive; "Clear" or "clear" both work. From env OPENCLAW_CLEAR_WORDS (comma-separated) or default. */
 const CLEAR_WORDS: string[] = (() => {
   const raw = process.env.OPENCLAW_CLEAR_WORDS ?? "clear";
   return raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
@@ -111,7 +111,7 @@ class OpenClawBridgeServer extends AppServer {
 
     const hasTrigger = (segment: string): boolean => getTriggerMatch(segment) !== null;
 
-    /** True if segment equals or ends with a clear phrase (e.g. "clear"). Case-insensitive. */
+    /** True if segment equals or ends with a clear phrase (e.g. "clear"). Case-insensitive so "Clear" from transcription clears. */
     const isClearCommand = (segment: string): boolean => {
       const s = segment.trim().toLowerCase();
       if (!s) return false;
