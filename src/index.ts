@@ -26,9 +26,9 @@ const TRIGGER_WORDS: string[] = (() => {
   return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["mac", "jarvis", "send", "execute"];
 })();
 
-/** Clear phrases. From env or defaults. */
+/** Clear phrases (reset transcript and return to welcome). From env or defaults. */
 const CLEAR_WORDS: string[] = (() => {
-  const raw = process.env.OPENCLAW_CLEAR_WORDS ?? "clear";
+  const raw = process.env.OPENCLAW_CLEAR_WORDS ?? "clear,stop,reset,cancel";
   return raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
 })();
 
@@ -90,6 +90,9 @@ class OpenClawBridgeServer extends AppServer {
 
     // Track if we triggered from interim to skip the matching final
     let lastInterimTriggerText = "";
+
+    // Track if we cleared from interim to skip the matching final
+    let clearedFromInterim = false;
 
     // Response buffer for streaming
     let responseBuffer = "";
@@ -184,14 +187,15 @@ class OpenClawBridgeServer extends AppServer {
     };
 
     /** Clear transcript and reset to idle */
-    const clearTranscript = () => {
+    const clearTranscript = (fromInterim = false) => {
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
+      clearedFromInterim = fromInterim;
       state = SessionState.IDLE;
       transcriptView.clear();
-      session.layouts.showTextWall("Cleared.", { durationMs: 1500 });
-      setTimeout(showWelcome, 1500);
+      session.layouts.showTextWall("Cleared.", { durationMs: 1000 });
+      setTimeout(showWelcome, 1000);
     };
 
     /** Build prompt payload from transcript */
@@ -294,6 +298,13 @@ class OpenClawBridgeServer extends AppServer {
         // Interim transcription
         currentInterim = text;
 
+        // Check for clear command in interim for instant response
+        if (isClearCommand(text)) {
+          currentInterim = "";
+          clearTranscript(true);
+          return;
+        }
+
         // Check for trigger in interim for faster response
         const trigger = getTriggerMatch(text);
         if (trigger) {
@@ -323,6 +334,13 @@ class OpenClawBridgeServer extends AppServer {
 
       session.logger.info(`Final transcription: ${text}`);
 
+      // Check if we already cleared from interim - skip matching final
+      if (clearedFromInterim) {
+        session.logger.info("Skipping final - already cleared from interim");
+        clearedFromInterim = false;
+        return;
+      }
+
       // Check if this is the final version of an interim we already triggered on
       const normalizedText = text.toLowerCase().trim();
       if (lastInterimTriggerText && normalizedText.includes(lastInterimTriggerText.slice(0, 10))) {
@@ -335,7 +353,7 @@ class OpenClawBridgeServer extends AppServer {
 
       // Check for clear command
       if (isClearCommand(text)) {
-        clearTranscript();
+        clearTranscript(false);
         return;
       }
 
