@@ -29,7 +29,7 @@ The bridge is a separate app that runs elsewhere (or on this machine). It speaks
 - **Body (JSON):**
   - `model`: `"openclaw"`
   - `stream`: `true` (bridge always streams)
-  - `input`: array of messages. Each message: `{ "type": "message", "role": "user"|"assistant"|"system", "content": [ { "type": "text", "text": "<string>" } ] }`
+  - `input`: array of messages. Each message: `{ "type": "message", "role": "user"|"assistant"|"system", "content": [ { "type": "input_text", "text": "<string>" } ] }` (OpenResponses spec uses `input_text` for user text content)
   - Optional: `user`: string (e.g. Mentra user id)
 
 **Response (when stream: true):**
@@ -114,7 +114,7 @@ A block the bridge operator can copy:
 
 - The bridge expects **HTTP** (not WebSocket) for the Responses API: `http://...` in `OPENCLAW_GATEWAY_URL`.
 - The bridge sends one user message per final transcription from the glasses and displays streamed text on the glasses (throttled to ~4 updates per second).
-- A minimal connectivity test from the bridge is: POST to `{OPENCLAW_GATEWAY_URL}/v1/responses` with `stream: false`, body `{ "model": "openclaw", "stream": false, "input": [ { "type": "message", "role": "user", "content": [ { "type": "text", "text": "Hi" } ] } ] }`, and `Authorization: Bearer <token>`. Success: 200 and valid response; 401: wrong token.
+- A minimal connectivity test from the bridge is: POST to `{OPENCLAW_GATEWAY_URL}/v1/responses` with `stream: false`, body `{ "model": "openclaw", "stream": false, "input": [ { "type": "message", "role": "user", "content": [ { "type": "input_text", "text": "Hi" } ] } ] }`, and `Authorization: Bearer <token>`. Success: 200 and valid response; 401: wrong token.
 ```
 
 ---
@@ -139,7 +139,7 @@ A block the bridge operator can copy:
 | URL | `{OPENCLAW_GATEWAY_URL}/v1/responses` (e.g. `http://host:18789/v1/responses`) |
 | Method | POST |
 | Auth | `Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>` |
-| Request body | `{ "model": "openclaw", "stream": true, "input": [ { "type": "message", "role": "user", "content": [ { "type": "text", "text": "<user message>" } ] } ], "user": "<optional>" }` |
+| Request body | `{ "model": "openclaw", "stream": true, "input": [ { "type": "message", "role": "user", "content": [ { "type": "input_text", "text": "<user message>" } ] } ], "user": "<optional>" }` |
 | Response (stream) | SSE: `response.output_text.delta` (data: `{ "delta": "<text>" }`), `response.output_text.done`, `response.completed`, or `response.failed` |
 | 401 | Invalid or missing token |
 

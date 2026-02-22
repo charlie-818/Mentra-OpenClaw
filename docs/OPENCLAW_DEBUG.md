@@ -39,7 +39,8 @@ Then open the app on the glasses and speak. Look for:
 - **No "Final transcription received"** – Transcription is not reaching the bridge. Check Mentra subscription (transcription stream) and microphone permissions.
 - **"Final transcription" and "Sending" but no output and no error** – OpenClaw may return 200 with empty or invalid SSE. Inspect OpenClaw logs on the gateway host.
 - **"OpenClaw error" on glasses** – See full error in bridge logs; common causes: connection refused, timeout, 401, 5xx.
-- **"Thinking..." then "Done." with no response** – The bridge received no streamed text. Ensure (1) the bridge sends `type: "text"` in message content (not `input_text`); (2) the OpenClaw gateway sends `response.output_text.delta` events with a `delta` or `text` string in the payload; (3) run the bridge with `DEBUG=1` or `LOG_SSE=1` and check which SSE event names and payload keys appear in the logs.
+- **"OpenClaw HTTP 400" / "Invalid input"** – The gateway rejected the request body. The bridge sends OpenResponses-format input: message content uses `type: "input_text"` (per [OpenResponses spec](https://www.openresponses.org/specification)). Ensure your OpenClaw gateway accepts that. Run `npm run test:openclaw` to verify connectivity and request format.
+- **"Thinking..." then "Done." with no response** – The bridge received no streamed text. Ensure the OpenClaw gateway sends `response.output_text.delta` events with a `delta` or `text` string. Run the bridge with `DEBUG=1` or `LOG_SSE=1` and check which SSE event names and payload keys appear in the logs.
 
 ## 4. OpenClaw on a different host (SSH machine)
 

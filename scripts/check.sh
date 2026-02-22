@@ -3,6 +3,7 @@
 # Uses PORT=3999 so it does not conflict with a bridge already on 3000.
 set -e
 cd "$(dirname "$0")/.."
+node scripts/assert-openclaw-request-format.js
 npm run build
 PORT=3999 node dist/index.js &
 PID=$!

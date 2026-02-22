@@ -13,7 +13,7 @@ export type OpenResponsesInput =
   | Array<{
       type: "message";
       role: "user" | "assistant" | "system";
-      content: Array<{ type: "text"; text: string }>;
+      content: Array<{ type: "input_text"; text: string }>;
     }>;
 
 export interface SSEEvent {
@@ -107,7 +107,7 @@ export async function streamOpenClawResponse(
       {
         type: "message" as const,
         role: "user" as const,
-        content: [{ type: "text" as const, text: userMessage }],
+        content: [{ type: "input_text" as const, text: userMessage }],
       },
     ],
     ...(options?.user && { user: options.user }),
