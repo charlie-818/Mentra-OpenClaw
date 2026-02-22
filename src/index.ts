@@ -106,12 +106,52 @@ class OpenClawBridgeServer extends AppServer {
     let wordRenderTimer: ReturnType<typeof setTimeout> | null = null;
     let streamComplete = false;      // True when OpenClaw stream is done
 
-    const WELCOME_MESSAGE = "Hey Charlie, What can I help you with today?";
+    // Greeting letter-by-letter rendering state
+    let greetingRenderTimer: ReturnType<typeof setTimeout> | null = null;
+    let greetingRenderedText = "";
+    let greetingIndex = 0;
 
-    /** Display welcome message */
+    const WELCOME_MESSAGE = "Hey Charlie, What can I help you with today?";
+    const GREETING_LETTER_DELAY_MS = 50; // Delay between each letter
+
+    /** Stop greeting renderer */
+    const stopGreetingRenderer = () => {
+      if (greetingRenderTimer) {
+        clearTimeout(greetingRenderTimer);
+        greetingRenderTimer = null;
+      }
+    };
+
+    /** Render next letter of greeting */
+    const renderNextGreetingLetter = () => {
+      if (greetingIndex >= WELCOME_MESSAGE.length) {
+        // Done rendering greeting
+        greetingRenderTimer = null;
+        return;
+      }
+
+      // Add next letter
+      greetingRenderedText += WELCOME_MESSAGE[greetingIndex];
+      greetingIndex++;
+
+      // Update display
+      session.layouts.showTextWall(greetingRenderedText, { durationMs: -1 });
+
+      // Schedule next letter
+      greetingRenderTimer = setTimeout(renderNextGreetingLetter, GREETING_LETTER_DELAY_MS);
+    };
+
+    /** Display welcome message letter by letter */
     const showWelcome = () => {
-      transcriptView.setContent(WELCOME_MESSAGE);
-      displayViewport(transcriptView);
+      // Stop any existing greeting animation
+      stopGreetingRenderer();
+
+      // Reset greeting state
+      greetingRenderedText = "";
+      greetingIndex = 0;
+
+      // Start letter-by-letter rendering
+      renderNextGreetingLetter();
     };
 
     /** Display a ScrollView's current viewport on glasses */
@@ -216,6 +256,8 @@ class OpenClawBridgeServer extends AppServer {
     /** Update transcript display */
     const updateTranscriptDisplay = () => {
       if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
+      // Stop greeting animation when user starts speaking
+      stopGreetingRenderer();
       transcriptView.setContent(buildTranscriptDisplay());
       transcriptView.scrollToBottom();
       scheduleDisplay(transcriptView);
@@ -464,6 +506,7 @@ class OpenClawBridgeServer extends AppServer {
       unsubTranscription();
       if (displayTimer) clearTimeout(displayTimer);
       stopWordRenderer();
+      stopGreetingRenderer();
     });
   }
 }
