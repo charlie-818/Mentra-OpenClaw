@@ -24,6 +24,12 @@ const TRIGGER_WORDS: string[] = (() => {
   return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["go", "send", "execute", "big mac"].sort((a, b) => b.length - a.length);
 })();
 
+/** Phrases that clear the transcript from view (e.g. "clear"). From env OPENCLAW_CLEAR_WORDS (comma-separated) or default. */
+const CLEAR_WORDS: string[] = (() => {
+  const raw = process.env.OPENCLAW_CLEAR_WORDS ?? "clear";
+  return raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
+})();
+
 if (!MENTRAOS_API_KEY) {
   console.error("MENTRAOS_API_KEY environment variable is required");
   process.exit(1);
@@ -52,8 +58,7 @@ class OpenClawBridgeServer extends AppServer {
       return;
     }
 
-    const triggerHint = TRIGGER_WORDS[0] ? ` Say "${TRIGGER_WORDS[0]}" to send.` : "";
-    session.layouts.showTextWall("Connected." + triggerHint);
+    session.layouts.showTextWall("Connected.");
 
     let busy = false;
     let buffer = "";
@@ -65,6 +70,8 @@ class OpenClawBridgeServer extends AppServer {
     let transcriptTotalChars = 0;
     let lastTranscriptDisplayTime = 0;
     let transcriptThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Live interim text (not yet final) so words appear as they are spoken. */
+    let currentInterim = "";
 
     const appendToTranscript = (text: string) => {
       if (text.length === 0) return;
@@ -92,6 +99,19 @@ class OpenClawBridgeServer extends AppServer {
     };
 
     const endsWithTrigger = (segment: string): boolean => getTriggerMatch(segment) !== null;
+
+    /** True if segment equals or ends with a clear phrase (e.g. "clear"). */
+    const isClearCommand = (segment: string): boolean => {
+      const s = segment.trim().toLowerCase();
+      if (!s) return false;
+      return CLEAR_WORDS.some((c) => s === c || s.endsWith(" " + c));
+    };
+
+    const clearTranscript = () => {
+      transcriptSegments = [];
+      transcriptTotalChars = 0;
+      currentInterim = "";
+    };
 
     /** Build payload (transcript with trigger stripped from end), clear transcript, return payload. */
     const getPayloadAndClear = (segment: string): string => {
@@ -126,8 +146,11 @@ class OpenClawBridgeServer extends AppServer {
     const showTranscriptOnWall = () => {
       if (busy) return;
       const tail = getTranscriptTail();
-      const hint = TRIGGER_WORDS[0] ? ` Say "${TRIGGER_WORDS[0]}" to send.` : "";
-      session.layouts.showTextWall(tail ? tail + hint : "Connected." + hint);
+      const withInterim = currentInterim ? (tail ? `${tail} ${currentInterim}` : currentInterim) : tail;
+      const display = withInterim && withInterim.length > TRANSCRIPT_DISPLAY_MAX_CHARS
+        ? withInterim.slice(-TRANSCRIPT_DISPLAY_MAX_CHARS)
+        : withInterim;
+      session.layouts.showTextWall(display || "Connected.");
       lastTranscriptDisplayTime = Date.now();
     };
 
@@ -234,10 +257,24 @@ class OpenClawBridgeServer extends AppServer {
     };
 
     const unsubTranscription = session.events.onTranscription((data) => {
-      if (!data.isFinal) return;
       const text = data.text?.trim() ?? "";
+
+      if (!data.isFinal) {
+        currentInterim = text;
+        scheduleThrottledTranscriptDisplay();
+        return;
+      }
+
+      currentInterim = "";
       if (text.length === 0) return;
       session.logger.info(`Final transcription received: ${text}`);
+
+      if (isClearCommand(text)) {
+        clearTranscript();
+        session.layouts.showTextWall("Cleared.");
+        return;
+      }
+
       appendToTranscript(text);
 
       if (endsWithTrigger(text)) {
