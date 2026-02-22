@@ -72,7 +72,8 @@ class OpenClawBridgeServer extends AppServer {
     const toolkit = createG1Toolkit();
     const { wrapper, measurer } = toolkit;
 
-    // ScrollView for response (OpenClaw output)
+    // ScrollView for transcript (user input) and response (OpenClaw output)
+    const transcriptView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
     const responseView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
 
     // State machine
@@ -233,6 +234,7 @@ class OpenClawBridgeServer extends AppServer {
       lastInterimTriggerText = "";
       clearedFromInterim = fromInterim;
       state = SessionState.IDLE;
+      transcriptView.clear();
       session.layouts.showTextWall("Cleared.", { durationMs: 1000 });
       setTimeout(showWelcome, 1000);
     };
@@ -246,7 +248,14 @@ class OpenClawBridgeServer extends AppServer {
       return parts.join(" ").trim();
     };
 
-    /** Show transcript on display */
+    /** Display transcript ScrollView */
+    const displayTranscriptView = () => {
+      const viewport = transcriptView.getViewport();
+      const text = viewport.lines.join("\n");
+      session.layouts.showTextWall(text, { durationMs: -1 });
+    };
+
+    /** Show transcript on display with ScrollView */
     const showTranscript = () => {
       if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
       stopGreetingRenderer();
@@ -254,7 +263,11 @@ class OpenClawBridgeServer extends AppServer {
       const display = currentInterim
         ? (final ? `${final} ${currentInterim}` : currentInterim)
         : (final || WELCOME_MESSAGE);
-      session.layouts.showTextWall(display, { durationMs: -1 });
+
+      // Use ScrollView for proper wrapping and scrolling
+      transcriptView.setContent(display);
+      transcriptView.scrollToBottom();
+      displayTranscriptView();
     };
 
     /** Send prompt to OpenClaw */
@@ -274,6 +287,7 @@ class OpenClawBridgeServer extends AppServer {
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
+      transcriptView.clear();
 
       // Reset response rendering state
       stopWordRenderer();
