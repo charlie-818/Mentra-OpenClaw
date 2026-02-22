@@ -40,51 +40,6 @@ if (!MENTRAOS_API_KEY) {
   process.exit(1);
 }
 
-/**
- * Strip markdown formatting from text for plain text display on glasses.
- * Preserves paragraph structure for readability while removing formatting.
- */
-function stripMarkdown(text: string): string {
-  return text
-    // Remove code blocks (``` ... ```) - keep just the code content
-    .replace(/```[\s\S]*?```/g, (match) => {
-      const lines = match.split("\n");
-      return lines.slice(1, -1).join("\n");
-    })
-    // Remove inline code (`code`)
-    .replace(/`([^`]+)`/g, "$1")
-    // Remove headers (# ## ### etc) - keep the text
-    .replace(/^#{1,6}\s+(.*)$/gm, "$1")
-    // Remove bold (**text** or __text__)
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    // Remove italic (*text* or _text_) - careful not to match bullet points
-    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1")
-    .replace(/(?<!_)_([^_]+)_(?!_)/g, "$1")
-    // Remove strikethrough (~~text~~)
-    .replace(/~~([^~]+)~~/g, "$1")
-    // Convert links [text](url) to just text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    // Remove image syntax ![alt](url)
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
-    // Remove horizontal rules (---, ***, ___)
-    .replace(/^[-*_]{3,}$/gm, "")
-    // Simplify bullet points
-    .replace(/^[\s]*[-*+]\s+/gm, "- ")
-    // Simplify numbered lists (1. or 1)) - keep the number for readability
-    .replace(/^[\s]*(\d+)[.)]\s+/gm, "$1. ")
-    // Remove blockquotes (> text)
-    .replace(/^>\s+/gm, "")
-    // Remove markdown line breaks (trailing double space)
-    .replace(/  +$/gm, "")
-    // Clean up multiple spaces
-    .replace(/ {2,}/g, " ")
-    // Normalize line endings - keep single and double newlines for structure
-    .replace(/\n{3,}/g, "\n\n")
-    // Trim whitespace
-    .trim();
-}
-
 /** Session state machine */
 enum SessionState {
   IDLE = "IDLE",
@@ -231,11 +186,8 @@ class OpenClawBridgeServer extends AppServer {
 
     /** Process new response text - extract words and queue for rendering */
     const processResponseDelta = () => {
-      // Strip markdown and get clean text
-      const cleanText = stripMarkdown(responseBuffer);
-
-      // Split into words
-      const allWords = cleanText.split(/\s+/).filter(Boolean);
+      // Split into words (keep raw text from OpenClaw as-is)
+      const allWords = responseBuffer.split(/\s+/).filter(Boolean);
 
       // Calculate how many words we've already queued/rendered
       const alreadyProcessed = renderedText.split(/\s+/).filter(Boolean).length + pendingWords.length;
