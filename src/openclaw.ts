@@ -23,6 +23,7 @@ export interface SSEEvent {
 
 export interface OutputTextDelta {
   delta?: string;
+  text?: string;
   [key: string]: unknown;
 }
 
@@ -106,7 +107,7 @@ export async function streamOpenClawResponse(
       {
         type: "message" as const,
         role: "user" as const,
-        content: [{ type: "input_text" as const, text: userMessage }],
+        content: [{ type: "text" as const, text: userMessage }],
       },
     ],
     ...(options?.user && { user: options.user }),
@@ -155,14 +156,31 @@ export async function streamOpenClawResponse(
     return;
   }
 
+  const logSSE = process.env.DEBUG === "1" || process.env.LOG_SSE === "1";
+
   try {
+    let hasSentDelta = false;
     for await (const { event, data } of parseSSE(reader)) {
+      if (logSSE && typeof data === "object" && data !== null) {
+        console.log(`[OpenClaw] SSE event: ${event} keys: ${Object.keys(data).join(", ")}`);
+      }
       if (event === "response.output_text.delta") {
         const payload = data as OutputTextDelta;
-        if (typeof payload?.delta === "string") {
-          callbacks.onDelta?.(payload.delta);
+        const chunk =
+          typeof payload?.delta === "string"
+            ? payload.delta
+            : typeof payload?.text === "string"
+              ? payload.text
+              : "";
+        if (chunk.length > 0) {
+          hasSentDelta = true;
+          callbacks.onDelta?.(chunk);
         }
       } else if (event === "response.output_text.done") {
+        const payload = data as OutputTextDelta;
+        if (!hasSentDelta && typeof payload?.text === "string" && payload.text.length > 0) {
+          callbacks.onDelta?.(payload.text);
+        }
         callbacks.onDone?.();
       } else if (event === "response.completed") {
         callbacks.onCompleted?.();

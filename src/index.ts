@@ -89,8 +89,13 @@ class OpenClawBridgeServer extends AppServer {
         userText,
         {
           onDelta: (delta) => {
+            const wasEmpty = buffer.length === 0;
             buffer += delta;
-            scheduleThrottledDisplay();
+            if (wasEmpty) {
+              flushDisplay();
+            } else {
+              scheduleThrottledDisplay();
+            }
           },
           onDone: () => {
             flushDisplay();

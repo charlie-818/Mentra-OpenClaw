@@ -23,7 +23,7 @@ const res = await fetch(url, {
   body: JSON.stringify({
     model: "openclaw",
     stream: false,
-    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Hi" }] }],
+    input: [{ type: "message", role: "user", content: [{ type: "text", text: "Hi" }] }],
   }),
 }).catch((err) => {
   console.error("Connection failed:", err.message);
