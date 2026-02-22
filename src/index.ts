@@ -148,7 +148,7 @@ class OpenClawBridgeServer extends AppServer {
     let wordRenderTimer: ReturnType<typeof setTimeout> | null = null;
     let streamComplete = false;      // True when OpenClaw stream is done
 
-    const WELCOME_MESSAGE = "Speak your prompt. Say Send, Execute, Mac, or Jarvis when ready.";
+    const WELCOME_MESSAGE = "Hey Charlie, What can I help you with today?";
 
     /** Display welcome message */
     const showWelcome = () => {
