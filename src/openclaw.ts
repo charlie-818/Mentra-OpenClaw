@@ -106,7 +106,7 @@ export async function streamOpenClawResponse(
       {
         type: "message" as const,
         role: "user" as const,
-        content: [{ type: "text" as const, text: userMessage }],
+        content: [{ type: "input_text" as const, text: userMessage }],
       },
     ],
     ...(options?.user && { user: options.user }),
