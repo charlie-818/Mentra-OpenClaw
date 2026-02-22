@@ -13,8 +13,8 @@ const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-br
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 
-/** Throttle display updates - reduced for snappier feel. */
-const DISPLAY_THROTTLE_MS = 100;
+/** Throttle display updates. */
+const DISPLAY_THROTTLE_MS = 150;
 
 /** G1 display constants from SDK */
 const G1_MAX_LINES = 5;
