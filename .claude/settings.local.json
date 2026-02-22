@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mentra --version:*)",
+      "Bash(mentra app:*)"
+    ]
+  }
+}
