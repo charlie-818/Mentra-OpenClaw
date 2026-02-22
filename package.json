@@ -2,7 +2,6 @@
   "name": "mentra-openclaw-bridge",
   "version": "1.0.0",
   "description": "Bridge Even G1 (MentraOS) glasses to OpenClaw: voice prompts to OpenClaw, streaming responses to glasses.",
-  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
