@@ -17,11 +17,11 @@ const TRANSCRIPT_LOG_MAX_CHARS = 2000;
 /** Max characters to show on the glasses (tail of log so newest is visible). */
 const TRANSCRIPT_DISPLAY_MAX_CHARS = 500;
 
-/** Trigger phrases (longer first so "big mac" matches before "mac"). From env OPENCLAW_TRIGGER_WORDS (comma-separated) or default. */
+/** Trigger phrases (longer first so "jarvis" matches before "mac"). From env OPENCLAW_TRIGGER_WORDS (comma-separated) or default. */
 const TRIGGER_WORDS: string[] = (() => {
-  const raw = process.env.OPENCLAW_TRIGGER_WORDS ?? "go,send,execute,big mac";
+  const raw = process.env.OPENCLAW_TRIGGER_WORDS ?? "mac,jarvis,send,execute";
   const list = raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
-  return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["go", "send", "execute", "big mac"].sort((a, b) => b.length - a.length);
+  return list.length > 0 ? list.sort((a, b) => b.length - a.length) : ["mac", "jarvis", "send", "execute"];
 })();
 
 /** Phrases that clear the transcript from view (e.g. "clear"). From env OPENCLAW_CLEAR_WORDS (comma-separated) or default. */
@@ -72,6 +72,8 @@ class OpenClawBridgeServer extends AppServer {
     let transcriptThrottleTimer: ReturnType<typeof setTimeout> | null = null;
     /** Live interim text (not yet final) so words appear as they are spoken. */
     let currentInterim = "";
+    /** True if we just sent from interim so we don't send again when the same phrase is finalized. */
+    let sentFromInterim = false;
 
     const appendToTranscript = (text: string) => {
       if (text.length === 0) return;
@@ -88,19 +90,28 @@ class OpenClawBridgeServer extends AppServer {
       return full.length <= TRANSCRIPT_DISPLAY_MAX_CHARS ? full : full.slice(-TRANSCRIPT_DISPLAY_MAX_CHARS);
     };
 
-    /** Returns the matched trigger phrase (trimmed lower) if segment equals or ends with one; longer triggers first. */
+    /** Returns the matched trigger phrase if segment equals, ends with, or starts with one (case-insensitive; transcription often capitalizes). */
     const getTriggerMatch = (segment: string): string | null => {
       const s = segment.trim().toLowerCase();
       if (!s) return null;
       for (const trigger of TRIGGER_WORDS) {
-        if (s === trigger || s.endsWith(" " + trigger)) return trigger;
+        if (s === trigger || s.endsWith(" " + trigger) || s.startsWith(trigger + " ")) return trigger;
       }
       return null;
     };
 
-    const endsWithTrigger = (segment: string): boolean => getTriggerMatch(segment) !== null;
+    /** Returns segment text with the trigger removed (from end, start, or whole). Case-insensitive: uses lowercased segment for detection, original for slicing. */
+    const segmentWithoutTrigger = (segment: string, trigger: string): string => {
+      const s = segment.trim().toLowerCase();
+      if (s === trigger) return "";
+      if (s.endsWith(" " + trigger)) return segment.trim().slice(0, -(trigger.length + 1)).trim();
+      if (s.startsWith(trigger + " ")) return segment.trim().slice(trigger.length + 1).trim();
+      return segment.trim();
+    };
 
-    /** True if segment equals or ends with a clear phrase (e.g. "clear"). */
+    const hasTrigger = (segment: string): boolean => getTriggerMatch(segment) !== null;
+
+    /** True if segment equals or ends with a clear phrase (e.g. "clear"). Case-insensitive. */
     const isClearCommand = (segment: string): boolean => {
       const s = segment.trim().toLowerCase();
       if (!s) return false;
@@ -113,34 +124,23 @@ class OpenClawBridgeServer extends AppServer {
       currentInterim = "";
     };
 
-    /** Build payload (transcript with trigger stripped from end), clear transcript, return payload. */
+    /** Build payload (transcript with trigger stripped from segment), clear transcript, return payload. */
     const getPayloadAndClear = (segment: string): string => {
       const trigger = getTriggerMatch(segment);
-      if (!trigger || transcriptSegments.length === 0) {
+      if (!trigger) {
         transcriptSegments = [];
         transcriptTotalChars = 0;
         return "";
       }
-
-      const last = transcriptSegments[transcriptSegments.length - 1];
-      const lastTrimmed = last.trim().toLowerCase();
-      let beforeLast: string;
-      let lastPart: string;
-      if (lastTrimmed === trigger) {
-        beforeLast = transcriptSegments.slice(0, -1).join(" ").trim();
-        lastPart = "";
-      } else if (lastTrimmed.endsWith(" " + trigger)) {
-        const trimmedLast = last.trim();
-        const suffix = " " + trigger;
-        lastPart = trimmedLast.slice(0, -suffix.length).trim();
-        beforeLast = transcriptSegments.slice(0, -1).join(" ").trim();
-      } else {
-        beforeLast = transcriptSegments.join(" ").trim();
-        lastPart = "";
-      }
+      const beforeLast = transcriptSegments.slice(0, -1).join(" ").trim();
+      const lastPart = segmentWithoutTrigger(
+        transcriptSegments.length > 0 ? transcriptSegments[transcriptSegments.length - 1]! : "",
+        trigger
+      );
       transcriptSegments = [];
       transcriptTotalChars = 0;
-      return beforeLast ? (lastPart ? `${beforeLast} ${lastPart}` : beforeLast) : lastPart;
+      const payload = [beforeLast, lastPart].filter(Boolean).join(" ").trim();
+      return payload;
     };
 
     const showTranscriptOnWall = () => {
@@ -256,12 +256,33 @@ class OpenClawBridgeServer extends AppServer {
       );
     };
 
+    /** Build payload from current transcript + segment (with trigger stripped), clear, and return payload. Does not append segment. */
+    const getPayloadAndClearFromInterim = (segment: string): string => {
+      const trigger = getTriggerMatch(segment);
+      if (!trigger) return "";
+      const transcriptSoFar = transcriptSegments.join(" ").trim();
+      const segmentPart = segmentWithoutTrigger(segment, trigger);
+      const payload = [transcriptSoFar, segmentPart].filter(Boolean).join(" ").trim();
+      clearTranscript();
+      return payload;
+    };
+
     const unsubTranscription = session.events.onTranscription((data) => {
       const text = data.text?.trim() ?? "";
 
       if (!data.isFinal) {
         currentInterim = text;
-        scheduleThrottledTranscriptDisplay();
+        const trigger = getTriggerMatch(text);
+        if (trigger && !busy) {
+          const payload = getPayloadAndClearFromInterim(text);
+          currentInterim = "";
+          if (payload.length > 0) {
+            sentFromInterim = true;
+            sendToOpenClaw(payload);
+          }
+        } else {
+          scheduleThrottledTranscriptDisplay();
+        }
         return;
       }
 
@@ -277,8 +298,12 @@ class OpenClawBridgeServer extends AppServer {
 
       appendToTranscript(text);
 
-      if (endsWithTrigger(text)) {
-        if (!busy) {
+      if (hasTrigger(text)) {
+        if (sentFromInterim) {
+          sentFromInterim = false;
+          clearTranscript();
+          scheduleThrottledTranscriptDisplay();
+        } else if (!busy) {
           const payload = getPayloadAndClear(text);
           if (payload.length > 0) {
             sendToOpenClaw(payload);
@@ -289,6 +314,7 @@ class OpenClawBridgeServer extends AppServer {
           session.layouts.showTextWall("Busy. Wait for the current response.");
         }
       } else {
+        sentFromInterim = false;
         scheduleThrottledTranscriptDisplay();
       }
     });
