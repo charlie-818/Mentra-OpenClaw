@@ -37,6 +37,48 @@ if (!MENTRAOS_API_KEY) {
   process.exit(1);
 }
 
+/**
+ * Strip markdown formatting from text for plain text display on glasses.
+ * Handles headers, bold, italic, code, links, lists, etc.
+ */
+function stripMarkdown(text: string): string {
+  return text
+    // Remove code blocks (``` ... ```)
+    .replace(/```[\s\S]*?```/g, (match) => {
+      // Extract just the code content without the backticks and language identifier
+      const lines = match.split("\n");
+      return lines.slice(1, -1).join("\n");
+    })
+    // Remove inline code (`code`)
+    .replace(/`([^`]+)`/g, "$1")
+    // Remove headers (# ## ### etc) - keep the text
+    .replace(/^#{1,6}\s+(.*)$/gm, "$1")
+    // Remove bold (**text** or __text__)
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    // Remove italic (*text* or _text_) - be careful not to match bullet points
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1")
+    .replace(/(?<!_)_([^_]+)_(?!_)/g, "$1")
+    // Remove strikethrough (~~text~~)
+    .replace(/~~([^~]+)~~/g, "$1")
+    // Convert links [text](url) to just text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    // Remove image syntax ![alt](url)
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    // Remove horizontal rules (---, ***, ___)
+    .replace(/^[-*_]{3,}$/gm, "")
+    // Convert bullet points to simple dash
+    .replace(/^[\s]*[-*+]\s+/gm, "- ")
+    // Convert numbered lists to simple format
+    .replace(/^[\s]*\d+\.\s+/gm, "")
+    // Remove blockquotes (> text)
+    .replace(/^>\s+/gm, "")
+    // Clean up multiple newlines
+    .replace(/\n{3,}/g, "\n\n")
+    // Trim whitespace
+    .trim();
+}
+
 /** Session state machine */
 enum SessionState {
   IDLE = "IDLE",
@@ -243,8 +285,8 @@ class OpenClawBridgeServer extends AppServer {
               state = SessionState.STREAMING;
             }
             responseBuffer += delta;
-            // Use appendContent for streaming with auto-scroll
-            responseView.setContent(responseBuffer);
+            // Strip markdown and display plain text
+            responseView.setContent(stripMarkdown(responseBuffer));
             responseView.scrollToBottom();
             scheduleDisplay(responseView);
           },
