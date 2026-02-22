@@ -40,6 +40,68 @@ if (!MENTRAOS_API_KEY) {
   process.exit(1);
 }
 
+/**
+ * Clean response text for readable display on glasses.
+ * Removes markdown formatting while preserving structure.
+ */
+function cleanResponseText(text: string): string {
+  return text
+    // Remove bold markers
+    .replace(/\*\*/g, "")
+    // Remove italic markers (single asterisk not at word boundary)
+    .replace(/(?<!\s)\*(?!\s)/g, "")
+    .replace(/\*(?=\w)/g, "")
+    .replace(/(?<=\w)\*/g, "")
+    // Remove underscores used for emphasis
+    .replace(/(?<!\s)_(?!\s)/g, "")
+    // Remove inline code backticks
+    .replace(/`/g, "")
+    // Remove code block markers
+    .replace(/```\w*\n?/g, "")
+    // Clean up bullet points - normalize to dash
+    .replace(/^[\s]*[•●○]\s*/gm, "- ")
+    // Normalize numbered lists with parenthesis to period
+    .replace(/^(\d+)\)\s*/gm, "$1. ")
+    // Remove trailing whitespace from lines
+    .replace(/[ \t]+$/gm, "")
+    // Normalize multiple spaces to single
+    .replace(/  +/g, " ")
+    // Normalize 3+ newlines to double newline (paragraph break)
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Tokenize text into words and newline markers for rendering.
+ * Preserves paragraph structure by tracking newlines.
+ */
+function tokenizeForRendering(text: string): string[] {
+  const tokens: string[] = [];
+  // Split into lines first to preserve newline structure
+  const lines = text.split("\n");
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Split line into words
+    const words = line.split(/\s+/).filter(Boolean);
+    tokens.push(...words);
+
+    // Add newline token between lines (not after last line)
+    if (i < lines.length - 1) {
+      // Double newline = paragraph break, single = line break
+      const nextLine = lines[i + 1];
+      if (nextLine === "" && i + 2 < lines.length) {
+        tokens.push("\n\n"); // Paragraph break
+        i++; // Skip the empty line
+      } else if (nextLine !== undefined) {
+        tokens.push("\n"); // Line break
+      }
+    }
+  }
+
+  return tokens;
+}
+
 /** Session state machine */
 enum SessionState {
   IDLE = "IDLE",
@@ -100,11 +162,12 @@ class OpenClawBridgeServer extends AppServer {
     // Response buffer for streaming (raw from OpenClaw)
     let responseBuffer = "";
 
-    // Word-by-word rendering state
-    let renderedText = "";           // Text currently shown on display
-    let pendingWords: string[] = []; // Words waiting to be rendered
+    // Token-by-token rendering state (words + newlines)
+    let renderedText = "";             // Text currently shown on display
+    let pendingTokens: string[] = [];  // Tokens waiting to be rendered
     let wordRenderTimer: ReturnType<typeof setTimeout> | null = null;
-    let streamComplete = false;      // True when OpenClaw stream is done
+    let streamComplete = false;        // True when OpenClaw stream is done
+    let lastProcessedLength = 0;       // Track how much of responseBuffer we've processed
 
     // Greeting letter-by-letter rendering state
     let greetingRenderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -193,17 +256,18 @@ class OpenClawBridgeServer extends AppServer {
       }
     };
 
-    /** Render next word from pending queue */
-    const renderNextWord = () => {
-      if (pendingWords.length === 0) {
-        // No more words to render
+    /** Render next token from pending queue */
+    const renderNextToken = () => {
+      if (pendingTokens.length === 0) {
+        // No more tokens to render
         if (streamComplete) {
-          // Stream is done and all words rendered - hold then return to welcome
+          // Stream is done and all tokens rendered - hold then return to welcome
           setTimeout(() => {
             state = SessionState.IDLE;
             responseBuffer = "";
             renderedText = "";
-            pendingWords = [];
+            pendingTokens = [];
+            lastProcessedLength = 0;
             streamComplete = false;
             showWelcome();
           }, 3000);
@@ -211,35 +275,50 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
-      // Get next word and add to rendered text
-      const word = pendingWords.shift()!;
-      renderedText = renderedText ? `${renderedText} ${word}` : word;
+      // Get next token and add to rendered text
+      const token = pendingTokens.shift()!;
+
+      // Handle newline tokens vs word tokens
+      if (token === "\n" || token === "\n\n") {
+        renderedText = renderedText + token;
+      } else {
+        // Regular word - add space before if not at start and not after newline
+        const needsSpace = renderedText.length > 0 &&
+                          !renderedText.endsWith("\n") &&
+                          !renderedText.endsWith(" ");
+        renderedText = needsSpace ? `${renderedText} ${token}` : `${renderedText}${token}`;
+      }
 
       // Update display
       responseView.setContent(renderedText);
       responseView.scrollToBottom();
       displayViewport(responseView);
 
-      // Schedule next word
-      wordRenderTimer = setTimeout(renderNextWord, WORD_RENDER_DELAY_MS);
+      // Schedule next token
+      wordRenderTimer = setTimeout(renderNextToken, WORD_RENDER_DELAY_MS);
     };
 
-    /** Process new response text - extract words and queue for rendering */
+    /** Process new response text - clean, tokenize, and queue for rendering */
     const processResponseDelta = () => {
-      // Split into words (keep raw text from OpenClaw as-is)
-      const allWords = responseBuffer.split(/\s+/).filter(Boolean);
+      // Only process new content
+      if (responseBuffer.length <= lastProcessedLength) return;
 
-      // Calculate how many words we've already queued/rendered
-      const alreadyProcessed = renderedText.split(/\s+/).filter(Boolean).length + pendingWords.length;
+      // Clean and tokenize the full response
+      const cleanedText = cleanResponseText(responseBuffer);
+      const allTokens = tokenizeForRendering(cleanedText);
 
-      // Queue new words
-      const newWords = allWords.slice(alreadyProcessed);
-      if (newWords.length > 0) {
-        pendingWords.push(...newWords);
+      // Queue only new tokens (tokens we haven't processed yet)
+      const currentTokenCount = pendingTokens.length +
+        tokenizeForRendering(cleanResponseText(responseBuffer.slice(0, lastProcessedLength))).length;
+
+      const newTokens = allTokens.slice(currentTokenCount);
+      if (newTokens.length > 0) {
+        pendingTokens.push(...newTokens);
+        lastProcessedLength = responseBuffer.length;
 
         // Start renderer if not running
-        if (!wordRenderTimer && pendingWords.length > 0) {
-          renderNextWord();
+        if (!wordRenderTimer && pendingTokens.length > 0) {
+          renderNextToken();
         }
       }
     };
@@ -339,7 +418,8 @@ class OpenClawBridgeServer extends AppServer {
       stopWordRenderer();
       responseBuffer = "";
       renderedText = "";
-      pendingWords = [];
+      pendingTokens = [];
+      lastProcessedLength = 0;
       streamComplete = false;
       responseView.clear();
 
@@ -394,7 +474,8 @@ class OpenClawBridgeServer extends AppServer {
               state = SessionState.IDLE;
               responseBuffer = "";
               renderedText = "";
-              pendingWords = [];
+              pendingTokens = [];
+              lastProcessedLength = 0;
               streamComplete = false;
               showWelcome();
             }, 5000);
