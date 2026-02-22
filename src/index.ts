@@ -1,6 +1,10 @@
 import "dotenv/config";
 import { AppServer, AppSession } from "@mentra/sdk";
 import {
+  createG1Toolkit,
+  ScrollView,
+} from "@mentra/sdk/display-utils";
+import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
 } from "./openclaw.js";
@@ -9,8 +13,11 @@ const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-br
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 
-/** Throttle display updates. */
-const DISPLAY_THROTTLE_MS = 200;
+/** Delay between rendering each word (ms). */
+const WORD_RENDER_DELAY_MS = 120;
+
+/** G1 display max lines */
+const G1_MAX_LINES = 5;
 
 /** Trigger phrases (longer first). From env or defaults. */
 const TRIGGER_WORDS: string[] = (() => {
@@ -61,6 +68,13 @@ class OpenClawBridgeServer extends AppServer {
       return;
     }
 
+    // Initialize G1 display toolkit for proper text wrapping
+    const toolkit = createG1Toolkit();
+    const { wrapper, measurer } = toolkit;
+
+    // ScrollView for response (OpenClaw output)
+    const responseView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
+
     // State machine
     let state: SessionState = SessionState.IDLE;
 
@@ -76,10 +90,13 @@ class OpenClawBridgeServer extends AppServer {
     // Track if we cleared from interim to skip the matching final
     let clearedFromInterim = false;
 
-    // Response buffer and throttling
+    // Response buffer for streaming
     let responseBuffer = "";
-    let lastDisplayTime = 0;
-    let displayTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Word-by-word rendering state
+    let renderedWordCount = 0;
+    let wordRenderTimer: ReturnType<typeof setTimeout> | null = null;
+    let streamComplete = false;
 
     // Greeting letter-by-letter rendering state
     let greetingRenderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,29 +137,60 @@ class OpenClawBridgeServer extends AppServer {
       renderNextGreetingLetter();
     };
 
-    /** Flush response buffer to display */
-    const flushResponseDisplay = () => {
-      if (responseBuffer.length > 0) {
-        session.layouts.showTextWall(responseBuffer, { durationMs: -1 });
-        lastDisplayTime = Date.now();
-      }
-      if (displayTimer) {
-        clearTimeout(displayTimer);
-        displayTimer = null;
+    /** Stop word renderer */
+    const stopWordRenderer = () => {
+      if (wordRenderTimer) {
+        clearTimeout(wordRenderTimer);
+        wordRenderTimer = null;
       }
     };
 
-    /** Schedule throttled response display */
-    const scheduleResponseDisplay = () => {
-      if (displayTimer !== null) return;
-      const elapsed = Date.now() - lastDisplayTime;
-      if (elapsed >= DISPLAY_THROTTLE_MS) {
-        flushResponseDisplay();
-      } else {
-        displayTimer = setTimeout(() => {
-          flushResponseDisplay();
-          displayTimer = null;
-        }, DISPLAY_THROTTLE_MS - elapsed);
+    /** Display current rendered text on ScrollView */
+    const displayResponseView = () => {
+      const viewport = responseView.getViewport();
+      const text = viewport.lines.join("\n");
+      session.layouts.showTextWall(text, { durationMs: -1 });
+    };
+
+    /** Render next word from buffer */
+    const renderNextWord = () => {
+      // Get all words from buffer
+      const allWords = responseBuffer.split(/\s+/).filter(Boolean);
+
+      if (renderedWordCount >= allWords.length) {
+        // No more words to render
+        wordRenderTimer = null;
+        if (streamComplete) {
+          // Stream done, hold response then return to welcome
+          setTimeout(() => {
+            state = SessionState.IDLE;
+            responseBuffer = "";
+            renderedWordCount = 0;
+            streamComplete = false;
+            responseView.clear();
+            showWelcome();
+          }, 3000);
+        }
+        return;
+      }
+
+      // Build text from words rendered so far + next word
+      renderedWordCount++;
+      const textToShow = allWords.slice(0, renderedWordCount).join(" ");
+
+      // Update ScrollView and display
+      responseView.setContent(textToShow);
+      responseView.scrollToBottom();
+      displayResponseView();
+
+      // Schedule next word
+      wordRenderTimer = setTimeout(renderNextWord, WORD_RENDER_DELAY_MS);
+    };
+
+    /** Start word rendering if not already running */
+    const startWordRenderer = () => {
+      if (!wordRenderTimer) {
+        renderNextWord();
       }
     };
 
@@ -226,13 +274,13 @@ class OpenClawBridgeServer extends AppServer {
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
-      responseBuffer = "";
-      lastDisplayTime = 0;
 
-      if (displayTimer) {
-        clearTimeout(displayTimer);
-        displayTimer = null;
-      }
+      // Reset response rendering state
+      stopWordRenderer();
+      responseBuffer = "";
+      renderedWordCount = 0;
+      streamComplete = false;
+      responseView.clear();
 
       session.layouts.showTextWall("Thinking...", { durationMs: -1 });
 
@@ -250,25 +298,24 @@ class OpenClawBridgeServer extends AppServer {
               state = SessionState.STREAMING;
             }
             responseBuffer += delta;
-            scheduleResponseDisplay();
+            startWordRenderer();
           },
           onDone: () => {
-            flushResponseDisplay();
+            // Continue rendering remaining words
           },
           onCompleted: () => {
+            streamComplete = true;
             if (responseBuffer.length === 0) {
               session.layouts.showTextWall("Done.", { durationMs: 2000 });
-            } else {
-              flushResponseDisplay();
+              setTimeout(() => {
+                state = SessionState.IDLE;
+                showWelcome();
+              }, 2000);
             }
-            // Hold response on screen then return to welcome
-            setTimeout(() => {
-              state = SessionState.IDLE;
-              responseBuffer = "";
-              showWelcome();
-            }, 3000);
+            // Otherwise renderNextWord handles transition when done
           },
           onFailed: (err) => {
+            stopWordRenderer();
             const message = err instanceof Error ? err.message : String(err);
             session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
             session.logger.error(
@@ -278,6 +325,8 @@ class OpenClawBridgeServer extends AppServer {
             setTimeout(() => {
               state = SessionState.IDLE;
               responseBuffer = "";
+              renderedWordCount = 0;
+              streamComplete = false;
               showWelcome();
             }, 5000);
           },
@@ -382,7 +431,7 @@ class OpenClawBridgeServer extends AppServer {
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
-      if (displayTimer) clearTimeout(displayTimer);
+      stopWordRenderer();
       stopGreetingRenderer();
     });
   }
