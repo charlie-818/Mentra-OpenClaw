@@ -3,7 +3,7 @@ import { AppServer, AppSession } from "@mentra/sdk";
 import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
-} from "./openclaw";
+} from "./openclaw.js";
 
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-bridge";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
