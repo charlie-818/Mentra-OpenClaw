@@ -13,8 +13,11 @@ const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-br
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 
-/** Throttle display updates. */
+/** Throttle display updates for transcript. */
 const DISPLAY_THROTTLE_MS = 150;
+
+/** Delay between rendering each word (ms) - slower = more readable. */
+const WORD_RENDER_DELAY_MS = 120;
 
 /** G1 display constants from SDK */
 const G1_MAX_LINES = 5;
@@ -136,8 +139,14 @@ class OpenClawBridgeServer extends AppServer {
     // Track if we cleared from interim to skip the matching final
     let clearedFromInterim = false;
 
-    // Response buffer for streaming
+    // Response buffer for streaming (raw from OpenClaw)
     let responseBuffer = "";
+
+    // Word-by-word rendering state
+    let renderedText = "";           // Text currently shown on display
+    let pendingWords: string[] = []; // Words waiting to be rendered
+    let wordRenderTimer: ReturnType<typeof setTimeout> | null = null;
+    let streamComplete = false;      // True when OpenClaw stream is done
 
     const WELCOME_MESSAGE = "Speak your prompt. Say Send, Execute, Mac, or Jarvis when ready.";
 
@@ -176,6 +185,68 @@ class OpenClawBridgeServer extends AppServer {
         displayTimer = null;
       }
       displayViewport(view);
+    };
+
+    /** Stop word rendering timer */
+    const stopWordRenderer = () => {
+      if (wordRenderTimer) {
+        clearTimeout(wordRenderTimer);
+        wordRenderTimer = null;
+      }
+    };
+
+    /** Render next word from pending queue */
+    const renderNextWord = () => {
+      if (pendingWords.length === 0) {
+        // No more words to render
+        if (streamComplete) {
+          // Stream is done and all words rendered - hold then return to welcome
+          setTimeout(() => {
+            state = SessionState.IDLE;
+            responseBuffer = "";
+            renderedText = "";
+            pendingWords = [];
+            streamComplete = false;
+            showWelcome();
+          }, 3000);
+        }
+        return;
+      }
+
+      // Get next word and add to rendered text
+      const word = pendingWords.shift()!;
+      renderedText = renderedText ? `${renderedText} ${word}` : word;
+
+      // Update display
+      responseView.setContent(renderedText);
+      responseView.scrollToBottom();
+      displayViewport(responseView);
+
+      // Schedule next word
+      wordRenderTimer = setTimeout(renderNextWord, WORD_RENDER_DELAY_MS);
+    };
+
+    /** Process new response text - extract words and queue for rendering */
+    const processResponseDelta = () => {
+      // Strip markdown and get clean text
+      const cleanText = stripMarkdown(responseBuffer);
+
+      // Split into words
+      const allWords = cleanText.split(/\s+/).filter(Boolean);
+
+      // Calculate how many words we've already queued/rendered
+      const alreadyProcessed = renderedText.split(/\s+/).filter(Boolean).length + pendingWords.length;
+
+      // Queue new words
+      const newWords = allWords.slice(alreadyProcessed);
+      if (newWords.length > 0) {
+        pendingWords.push(...newWords);
+
+        // Start renderer if not running
+        if (!wordRenderTimer && pendingWords.length > 0) {
+          renderNextWord();
+        }
+      }
     };
 
     /** Build display text from transcript segments + interim */
@@ -266,7 +337,13 @@ class OpenClawBridgeServer extends AppServer {
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
+
+      // Reset response rendering state
+      stopWordRenderer();
       responseBuffer = "";
+      renderedText = "";
+      pendingWords = [];
+      streamComplete = false;
       responseView.clear();
 
       session.layouts.showTextWall("Thinking...", { durationMs: -1 });
@@ -284,29 +361,32 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               state = SessionState.STREAMING;
             }
+            // Accumulate raw response
             responseBuffer += delta;
-            // Strip markdown and display plain text
-            responseView.setContent(stripMarkdown(responseBuffer));
-            responseView.scrollToBottom();
-            scheduleDisplay(responseView);
+            // Process and queue new words for rendering
+            processResponseDelta();
           },
           onDone: () => {
-            flushDisplay(responseView);
+            // Process any remaining text
+            processResponseDelta();
           },
           onCompleted: () => {
+            streamComplete = true;
+            // Process final words
+            processResponseDelta();
+
+            // If no words were rendered, show done message
             if (responseBuffer.length === 0) {
               session.layouts.showTextWall("Done.", { durationMs: 2000 });
-            } else {
-              flushDisplay(responseView);
+              setTimeout(() => {
+                state = SessionState.IDLE;
+                showWelcome();
+              }, 2000);
             }
-            // Hold response on screen for a moment before returning to idle
-            setTimeout(() => {
-              state = SessionState.IDLE;
-              responseBuffer = "";
-              showWelcome();
-            }, 3000);
+            // Otherwise renderNextWord will handle the transition when done
           },
           onFailed: (err) => {
+            stopWordRenderer();
             const message = err instanceof Error ? err.message : String(err);
             session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
             session.logger.error(
@@ -316,6 +396,9 @@ class OpenClawBridgeServer extends AppServer {
             setTimeout(() => {
               state = SessionState.IDLE;
               responseBuffer = "";
+              renderedText = "";
+              pendingWords = [];
+              streamComplete = false;
               showWelcome();
             }, 5000);
           },
@@ -425,6 +508,7 @@ class OpenClawBridgeServer extends AppServer {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
       if (displayTimer) clearTimeout(displayTimer);
+      stopWordRenderer();
     });
   }
 }
