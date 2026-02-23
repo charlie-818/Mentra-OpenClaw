@@ -31,6 +31,8 @@ export interface SessionEntry {
   };
   /** Optional: called by Push API POST /mic to toggle listening */
   requestListening?(listening: boolean): void;
+  /** Optional: called by Push API POST /push to show scrolling text on glasses */
+  showPushText?(text: string, durationMs: number): void;
 }
 
 const sessions = new Map<string, SessionEntry>();

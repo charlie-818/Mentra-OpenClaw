@@ -38,7 +38,11 @@ export function handlePush(req: Request, res: Response): void {
     jsonOk(res, { ok: false, error: "No active session" });
     return;
   }
-  entry.session.layouts.showTextWall(text, { durationMs });
+  if (entry.showPushText) {
+    entry.showPushText(text, durationMs);
+  } else {
+    entry.session.layouts.showTextWall(text, { durationMs });
+  }
   jsonOk(res, { ok: true });
 }
 

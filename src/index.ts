@@ -24,6 +24,8 @@ const WORD_RENDER_DELAY_MS = 120;
 /** Format response text for readability - put list items on their own lines */
 const formatResponseText = (text: string): string => {
   return text
+    // Insert space where asterisks sit between non-whitespace (avoid fusing words)
+    .replace(/(\S)\*+(\S)/g, "$1 $2")
     // Strip markdown formatting
     .replace(/\*+/g, "")
     .replace(/#+\s*/g, "")
@@ -165,6 +167,20 @@ class OpenClawBridgeServer extends AppServer {
     // ScrollView for transcript (user input) and response (OpenClaw output)
     const transcriptView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
     const responseView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
+    const pushView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
+
+    let pushScrollInterval: ReturnType<typeof setInterval> | null = null;
+    let pushScrollEndTimeout: ReturnType<typeof setTimeout> | null = null;
+    const stopPushScroll = () => {
+      if (pushScrollInterval) {
+        clearInterval(pushScrollInterval);
+        pushScrollInterval = null;
+      }
+      if (pushScrollEndTimeout) {
+        clearTimeout(pushScrollEndTimeout);
+        pushScrollEndTimeout = null;
+      }
+    };
 
     // State machine
     let state: SessionState = SessionState.IDLE;
@@ -263,6 +279,30 @@ class OpenClawBridgeServer extends AppServer {
           setState(SessionState.IDLE);
           showWelcome();
         }
+      },
+      showPushText(text: string, durationMs: number) {
+        stopPushScroll();
+        const content = text.trim() || " ";
+        pushView.setContent(content, { breakMode: "strict-word" });
+        pushView.scrollToTop();
+        const displayPushViewport = () => {
+          const viewport = pushView.getViewport();
+          session.layouts.showTextWall(joinViewportLinesWithSpaces(viewport.lines), { durationMs: -1 });
+        };
+        displayPushViewport();
+
+        const PUSH_SCROLL_INTERVAL_MS = 700;
+        pushScrollInterval = setInterval(() => {
+          pushView.scrollDown(1);
+          displayPushViewport();
+        }, PUSH_SCROLL_INTERVAL_MS);
+
+        pushScrollEndTimeout = setTimeout(() => {
+          stopPushScroll();
+          if (state === SessionState.IDLE) showWelcome();
+          else if (state === SessionState.LISTENING || state === SessionState.DICTATING) showTranscript();
+          else if (state === SessionState.SENDING || state === SessionState.STREAMING) displayResponseView();
+        }, durationMs);
       },
     };
     registry.register(entry);
@@ -781,6 +821,7 @@ class OpenClawBridgeServer extends AppServer {
       unsubGlassesBattery();
       stopWordRenderer();
       stopGreetingRenderer();
+      stopPushScroll();
     });
   }
 }
