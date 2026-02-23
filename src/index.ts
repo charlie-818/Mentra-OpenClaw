@@ -198,17 +198,16 @@ class OpenClawBridgeServer extends AppServer {
     let glassesBatteryLevel: number | null = null;
 
     const getStatusLine = () => {
-      const weatherLine =
-        weatherTempC != null ? `${weatherTempC}°C` : "-- °C";
       const tz = process.env.TIMEZONE || "America/Los_Angeles";
       const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
-      const line2 = `${timeStr}  ${battery}`;
+      const tempStr = weatherTempC != null ? `${weatherTempC}°C` : "-- °C";
+      const line1 = `${timeStr}  ${battery}  ${tempStr}`;
       const spyLine =
         spyPriceUsd != null
           ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
           : "SPY --";
-      return `${weatherLine}\n${line2}\n${spyLine}`;
+      return `${line1}\n${spyLine}`;
     };
 
     const DIVIDER = "---------------------";
