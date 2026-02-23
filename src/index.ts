@@ -169,12 +169,14 @@ class OpenClawBridgeServer extends AppServer {
     const responseView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
     const pushView = new ScrollView(measurer, wrapper, G1_MAX_LINES);
 
-    let pushScrollInterval: ReturnType<typeof setInterval> | null = null;
+    let pushTokens: string[] = [];
+    let pushRenderedWordCount = 0;
+    let pushWordRenderTimer: ReturnType<typeof setTimeout> | null = null;
     let pushScrollEndTimeout: ReturnType<typeof setTimeout> | null = null;
     const stopPushScroll = () => {
-      if (pushScrollInterval) {
-        clearInterval(pushScrollInterval);
-        pushScrollInterval = null;
+      if (pushWordRenderTimer) {
+        clearTimeout(pushWordRenderTimer);
+        pushWordRenderTimer = null;
       }
       if (pushScrollEndTimeout) {
         clearTimeout(pushScrollEndTimeout);
@@ -283,19 +285,47 @@ class OpenClawBridgeServer extends AppServer {
       showPushText(text: string, durationMs: number) {
         stopPushScroll();
         const content = text.trim() || " ";
-        pushView.setContent(content, { breakMode: "strict-word" });
-        pushView.scrollToTop();
+        pushTokens = content.split(/(\n)| +/).filter(Boolean);
+        pushRenderedWordCount = 0;
+
         const displayPushViewport = () => {
           const viewport = pushView.getViewport();
           session.layouts.showTextWall(joinViewportLinesWithSpaces(viewport.lines), { durationMs: -1 });
         };
-        displayPushViewport();
 
-        const PUSH_SCROLL_INTERVAL_MS = 700;
-        pushScrollInterval = setInterval(() => {
-          pushView.scrollDown(1);
+        const renderNextPushWord = () => {
+          if (pushRenderedWordCount >= pushTokens.length) {
+            pushWordRenderTimer = null;
+            return;
+          }
+          pushRenderedWordCount++;
+          let textToShow = "";
+          for (let i = 0; i < pushRenderedWordCount; i++) {
+            const token = pushTokens[i];
+            if (token === "\n") {
+              textToShow += "\n";
+            } else {
+              if (textToShow.length > 0 && !textToShow.endsWith("\n")) {
+                textToShow += " ";
+              }
+              textToShow += token;
+            }
+          }
+          pushView.setContent(textToShow, { breakMode: "strict-word" });
+          pushView.scrollToBottom();
           displayPushViewport();
-        }, PUSH_SCROLL_INTERVAL_MS);
+          if (pushRenderedWordCount < pushTokens.length) {
+            pushWordRenderTimer = setTimeout(renderNextPushWord, WORD_RENDER_DELAY_MS);
+          }
+        };
+
+        if (pushTokens.length === 0) {
+          pushView.setContent(content, { breakMode: "strict-word" });
+          pushView.scrollToBottom();
+          displayPushViewport();
+        } else {
+          renderNextPushWord();
+        }
 
         pushScrollEndTimeout = setTimeout(() => {
           stopPushScroll();
