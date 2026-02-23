@@ -108,14 +108,12 @@ class OpenClawBridgeServer extends AppServer {
 
     // Status bar state
     let glassesBatteryLevel: number | null = null;
-    let phoneBatteryLevel: number | null = null;
 
     const getStatusLine = () => {
       const tz = process.env.TIMEZONE || "America/Los_Angeles";
       const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
-      const glasses = glassesBatteryLevel !== null ? `G:${glassesBatteryLevel}%` : "G:--";
-      const phone = phoneBatteryLevel !== null ? `P:${phoneBatteryLevel}%` : "P:--";
-      return `${timeStr}  ${glasses}  ${phone}`;
+      const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
+      return `${timeStr}  ${battery}`;
     };
 
     const DIVIDER = "---------------------";
@@ -498,16 +496,11 @@ class OpenClawBridgeServer extends AppServer {
       glassesBatteryLevel = level;
     });
 
-    const unsubPhoneBattery = session.events.onPhoneBattery((data) => {
-      phoneBatteryLevel = data.level;
-    });
-
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
       unsubHeadPosition();
       unsubGlassesBattery();
-      unsubPhoneBattery();
       stopWordRenderer();
       stopGreetingRenderer();
     });
