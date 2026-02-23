@@ -32,6 +32,8 @@ const CLEAR_WORDS: string[] = (() => {
   return raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
 })();
 
+let lastAnswer = "";
+
 if (!MENTRAOS_API_KEY) {
   console.error("MENTRAOS_API_KEY environment variable is required");
   process.exit(1);
@@ -162,15 +164,11 @@ class OpenClawBridgeServer extends AppServer {
         // No more words to render
         wordRenderTimer = null;
         if (streamComplete) {
-          // Stream done, hold response then return to welcome
-          setTimeout(() => {
-            state = SessionState.IDLE;
-            responseBuffer = "";
-            renderedWordCount = 0;
-            streamComplete = false;
-            responseView.clear();
-            showWelcome();
-          }, 3000);
+          lastAnswer = responseBuffer;
+          state = SessionState.IDLE;
+          responseBuffer = "";
+          renderedWordCount = 0;
+          streamComplete = false;
         }
         return;
       }
@@ -349,8 +347,12 @@ class OpenClawBridgeServer extends AppServer {
       );
     };
 
-    // Show welcome on connect
-    showWelcome();
+    // Show last answer on reconnect, or welcome if no answer yet
+    if (lastAnswer) {
+      session.layouts.showTextWall(lastAnswer, { durationMs: -1 });
+    } else {
+      showWelcome();
+    }
 
     // Handle transcription events
     const unsubTranscription = session.events.onTranscription((data) => {
