@@ -5,6 +5,7 @@ import {
   createG1Toolkit,
   ScrollView,
 } from "@mentra/sdk/display-utils";
+import type { Usage } from "./openclaw.js";
 import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
@@ -73,22 +74,27 @@ const COPILOT_TOGGLE_PHRASES = [
 
 let lastAnswer = "";
 
-/** Process-level ETH price cache (CoinGecko). */
-let ethPriceUsd: number | null = null;
-let eth24hChange: number | null = null;
+/** Process-level SPY price cache (Yahoo Finance). */
+let spyPriceUsd: number | null = null;
+let spyChangePercent: number | null = null;
 
-const COINGECKO_ETH_URL =
-  "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true";
+const YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=SPY";
 
-async function fetchEthPrice(): Promise<void> {
+async function fetchSpyPrice(): Promise<void> {
   try {
-    const res = await fetch(COINGECKO_ETH_URL);
+    const res = await fetch(YAHOO_QUOTE_URL, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MentraOpenClaw/1.0)" },
+    });
     if (!res.ok) return;
-    const data = (await res.json()) as { ethereum?: { usd?: number; usd_24h_change?: number } };
-    const price = data?.ethereum?.usd;
-    const change = data?.ethereum?.usd_24h_change;
-    if (typeof price === "number") ethPriceUsd = price;
-    if (typeof change === "number") eth24hChange = change;
+    const data = (await res.json()) as {
+      quoteResponse?: { result?: Array<{ regularMarketPrice?: number; regularMarketChangePercent?: number }> };
+    };
+    const quote = data?.quoteResponse?.result?.[0];
+    if (!quote) return;
+    const price = quote.regularMarketPrice;
+    const change = quote.regularMarketChangePercent;
+    if (typeof price === "number") spyPriceUsd = price;
+    if (typeof change === "number") spyChangePercent = change;
   } catch {
     // Leave existing cache unchanged
   }
@@ -170,16 +176,26 @@ class OpenClawBridgeServer extends AppServer {
     // Status bar state
     let glassesBatteryLevel: number | null = null;
 
+    // Last response usage (from response.completed); shown on first line when set
+    let lastUsage: Usage | null = null;
+
     const getStatusLine = () => {
       const tz = process.env.TIMEZONE || "America/Los_Angeles";
       const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
       const line1 = `${timeStr}  ${battery}`;
-      const ethLine =
-        ethPriceUsd != null
-          ? `ETH $${ethPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${eth24hChange != null ? ` (24h ${eth24hChange >= 0 ? "+" : ""}${eth24hChange.toFixed(1)}%)` : ""}`
-          : "ETH --";
-      return `${line1}\n${ethLine}`;
+      const spyLine =
+        spyPriceUsd != null
+          ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
+          : "SPY --";
+      const inTok = lastUsage?.input_tokens;
+      const outTok = lastUsage?.output_tokens;
+      const usageLine =
+        inTok != null || outTok != null
+          ? `Tok: ${inTok ?? "--"} in ${outTok ?? "--"} out`
+          : "";
+      const lines = usageLine ? [usageLine, line1, spyLine] : [line1, spyLine];
+      return lines.join("\n");
     };
 
     const DIVIDER = "---------------------";
@@ -519,7 +535,8 @@ class OpenClawBridgeServer extends AppServer {
           onDone: () => {
             // Continue rendering remaining words
           },
-          onCompleted: () => {
+          onCompleted: (payload) => {
+            if (payload?.usage) lastUsage = payload.usage;
             streamComplete = true;
             if (responseBuffer.length === 0) {
               currentSendIsCopilot = false;
@@ -775,8 +792,8 @@ app.get("/status", pushRoutes.handleStatus);
 app.get("/debug", pushRoutes.handleDebug);
 
 server.start().then(() => {
-  fetchEthPrice();
-  setInterval(fetchEthPrice, 60_000);
+  fetchSpyPrice();
+  setInterval(fetchSpyPrice, 60_000);
 }).catch((err) => {
   console.error("Failed to start server:", err);
   process.exit(1);
