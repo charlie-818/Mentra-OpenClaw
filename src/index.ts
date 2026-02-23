@@ -20,13 +20,19 @@ const WORD_RENDER_DELAY_MS = 120;
 const formatResponseText = (text: string): string => {
   return text
     // Strip markdown formatting
-    .replace(/\*/g, "")
+    .replace(/\*+/g, "")
     .replace(/#+\s*/g, "")
     .replace(/"/g, "")
-    // Add newline before numbered list items (1. 2. 3. etc)
-    .replace(/\s+(\d+\.)\s+/g, "\n$1 ")
-    // Add newline before bullet points (- or •)
-    .replace(/\s+([-•])\s+/g, "\n$1 ");
+    // Normalize whitespace (collapse multiple spaces)
+    .replace(/  +/g, " ")
+    // Add newline before numbered list items (1. 2. 3. etc) - handles mid-sentence numbers
+    .replace(/([.!?])\s+(\d+\.)\s/g, "$1\n$2 ")
+    .replace(/([a-z])\s+(\d+\.)\s/g, "$1\n$2 ")
+    // Add newline before bullet dashes that follow text
+    .replace(/([.!?a-z])\s+-\s+/gi, "$1\n- ")
+    // Clean up any double newlines
+    .replace(/\n\n+/g, "\n")
+    .trim();
 };
 
 /** G1 display max lines */
