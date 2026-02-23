@@ -12,6 +12,10 @@ const G1_MAX_LINES = 5;
 /** Plausible G1 line width in characters (wrap to this). */
 const G1_LINE_CHARS = 22;
 
+const SUFFIX_MERGE_BLOCKLIST = new Set(
+  "a,the,he,she,we,me,be,to,of,in,on,at,is,or,so,no,go,do,up,us,as,an,am".split(",")
+);
+
 function formatResponseText(text, insertSpaceAtAsterisks = true) {
   let t = text;
   if (insertSpaceAtAsterisks) {
@@ -24,6 +28,9 @@ function formatResponseText(text, insertSpaceAtAsterisks = true) {
     .replace(/(\S)"(\S)/g, "$1 $2")
     .replace(/"/g, "")
     .replace(/  +/g, " ")
+    .replace(/(\w+) (ly|ed|ing|ness|er|est|ful|less|ment|able|ible|tion|sion|'s)\b/gi, (_, word, suffix) =>
+      SUFFIX_MERGE_BLOCKLIST.has(word.toLowerCase()) ? `${word} ${suffix}` : word + suffix
+    )
     .replace(/([.!?])\s+(\d+\.)\s/g, "$1\n$2 ")
     .replace(/([a-z])\s+(\d+\.)\s/g, "$1\n$2 ")
     .replace(/([.!?a-z])\s+-\s+/gi, "$1\n- ")

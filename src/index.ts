@@ -21,6 +21,11 @@ const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 /** Delay between rendering each word (ms). */
 const WORD_RENDER_DELAY_MS = 120;
 
+/** Words that must not be merged with a following suffix (e.g. "the ly" stays two tokens; "it" allowed so "it 's" -> "it's") */
+const SUFFIX_MERGE_BLOCKLIST = new Set(
+  "a,the,he,she,we,me,be,to,of,in,on,at,is,or,so,no,go,do,up,us,as,an,am".split(",")
+);
+
 /** Format response text for readability - put list items on their own lines */
 const formatResponseText = (text: string): string => {
   return text
@@ -34,6 +39,10 @@ const formatResponseText = (text: string): string => {
     .replace(/"/g, "")
     // Normalize whitespace (collapse multiple spaces)
     .replace(/  +/g, " ")
+    // Merge word + space + suffix into one word (calm ly -> calmly); skip blocklisted words
+    .replace(/(\w+) (ly|ed|ing|ness|er|est|ful|less|ment|able|ible|tion|sion|'s)\b/gi, (_, word, suffix) =>
+      SUFFIX_MERGE_BLOCKLIST.has(word.toLowerCase()) ? `${word} ${suffix}` : word + suffix
+    )
     // Add newline before numbered list items (1. 2. 3. etc) - handles mid-sentence numbers
     .replace(/([.!?])\s+(\d+\.)\s/g, "$1\n$2 ")
     .replace(/([a-z])\s+(\d+\.)\s/g, "$1\n$2 ")
@@ -600,13 +609,17 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               setState(SessionState.STREAMING);
             }
-            // Ensure space between chunks so words don't concatenate when stream sends "word1" then "word2"
-            if (
+            // Insert space only at clear word boundaries to avoid splitting contractions (don't -> don 't) or mid-word (elevate -> el evate)
+            const bufferEndsWordBoundary = /\n$|[.!?,;:]$/.test(responseBuffer);
+            const deltaStartsNewWord = delta.length > 0 && /[A-Z]/.test(delta.charAt(0));
+            const needSpaceBetweenChunks =
               responseBuffer.length > 0 &&
               !/\s$/.test(responseBuffer) &&
               delta.length > 0 &&
-              !/^\s/.test(delta)
-            ) {
+              !/^\s/.test(delta) &&
+              !delta.startsWith("'") && // contraction: don't, can't, 't, 's, etc.
+              (bufferEndsWordBoundary || deltaStartsNewWord);
+            if (needSpaceBetweenChunks) {
               responseBuffer += " ";
             }
             responseBuffer += delta;
