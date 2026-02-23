@@ -106,6 +106,22 @@ class OpenClawBridgeServer extends AppServer {
     let greetingRenderedText = "";
     let greetingIndex = 0;
 
+    // Status bar state
+    let notificationCount = 0;
+    let glassesBatteryLevel: number | null = null;
+
+    const getStatusLine = () => {
+      const now = new Date();
+      const hours = now.getHours();
+      const minutes = now.getMinutes().toString().padStart(2, "0");
+      const ampm = hours >= 12 ? "PM" : "AM";
+      const hour12 = (hours % 12 || 12).toString();
+      const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
+      return `${hour12}:${minutes} ${ampm}  ${notificationCount} notifs  ${battery}`;
+    };
+
+    const DIVIDER = "---------------------";
+
     const WELCOME_MESSAGE = "Hey Charlie, What can I help you with today?";
     const GREETING_LETTER_DELAY_MS = 50;
 
@@ -127,7 +143,7 @@ class OpenClawBridgeServer extends AppServer {
       greetingRenderedText += WELCOME_MESSAGE[greetingIndex];
       greetingIndex++;
 
-      session.layouts.showTextWall(greetingRenderedText, { durationMs: -1 });
+      session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\n${greetingRenderedText}`, { durationMs: -1 });
 
       greetingRenderTimer = setTimeout(renderNextGreetingLetter, GREETING_LETTER_DELAY_MS);
     };
@@ -479,10 +495,25 @@ class OpenClawBridgeServer extends AppServer {
       }
     });
 
+    const unsubGlassesBattery = session.events.onGlassesBattery((data) => {
+      glassesBatteryLevel = data.level;
+    });
+
+    const unsubPhoneNotifications = session.events.onPhoneNotifications(() => {
+      notificationCount++;
+    });
+
+    const unsubPhoneNotificationDismissed = session.events.onPhoneNotificationDismissed(() => {
+      if (notificationCount > 0) notificationCount--;
+    });
+
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
       unsubHeadPosition();
+      unsubGlassesBattery();
+      unsubPhoneNotifications();
+      unsubPhoneNotificationDismissed();
       stopWordRenderer();
       stopGreetingRenderer();
     });
