@@ -27,23 +27,6 @@ export interface OutputTextDelta {
   [key: string]: unknown;
 }
 
-/** Token usage from OpenResponses/OpenClaw response (when provider reports it). Supports both naming conventions. */
-export interface Usage {
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
-  /** OpenAI/OpenClaw style (same as input_tokens). */
-  prompt_tokens?: number;
-  /** OpenAI/OpenClaw style (same as output_tokens). */
-  completion_tokens?: number;
-}
-
-/** Payload for response.completed SSE event. */
-export interface CompletedPayload {
-  usage?: Usage;
-  [key: string]: unknown;
-}
-
 /**
  * Parse SSE stream from response body. Yields { event, data } for each event.
  */
@@ -93,7 +76,7 @@ async function* parseSSE(
 export interface StreamCallbacks {
   onDelta?: (text: string) => void;
   onDone?: () => void;
-  onCompleted?: (payload?: CompletedPayload) => void;
+  onCompleted?: () => void;
   onFailed?: (error: unknown) => void;
 }
 
@@ -200,7 +183,7 @@ export async function streamOpenClawResponse(
         }
         callbacks.onDone?.();
       } else if (event === "response.completed") {
-        callbacks.onCompleted?.(data as CompletedPayload);
+        callbacks.onCompleted?.();
       } else if (event === "response.failed") {
         callbacks.onFailed?.(data);
       }

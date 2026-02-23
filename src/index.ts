@@ -5,7 +5,6 @@ import {
   createG1Toolkit,
   ScrollView,
 } from "@mentra/sdk/display-utils";
-import type { Usage } from "./openclaw.js";
 import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
@@ -81,6 +80,12 @@ let spyChangePercent: number | null = null;
 /** Free SPY quote API (no key required). */
 const SPY_QUOTE_URL = "https://stockprices.dev/api/etfs/SPY";
 
+/** Westwood, LA weather (Open-Meteo, no key required). */
+const WESTWOOD_WEATHER_URL =
+  "https://api.open-meteo.com/v1/forecast?latitude=34.0625&longitude=-118.4452&current=temperature_2m&temperature_unit=celsius";
+
+let weatherTempC: number | null = null;
+
 async function fetchSpyPrice(): Promise<void> {
   try {
     const res = await fetch(SPY_QUOTE_URL, {
@@ -95,6 +100,22 @@ async function fetchSpyPrice(): Promise<void> {
     const change = data?.ChangePercentage;
     if (typeof price === "number") spyPriceUsd = price;
     if (typeof change === "number") spyChangePercent = change;
+  } catch {
+    // Leave existing cache unchanged
+  }
+}
+
+async function fetchWestwoodWeather(): Promise<void> {
+  try {
+    const res = await fetch(WESTWOOD_WEATHER_URL, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MentraOpenClaw/1.0)" },
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as {
+      current?: { temperature_2m?: number };
+    };
+    const temp = data?.current?.temperature_2m;
+    if (typeof temp === "number") weatherTempC = temp;
   } catch {
     // Leave existing cache unchanged
   }
@@ -176,27 +197,18 @@ class OpenClawBridgeServer extends AppServer {
     // Status bar state
     let glassesBatteryLevel: number | null = null;
 
-    // Last response usage (from response.completed); shown on first line when set
-    let lastUsage: Usage | null = null;
-
     const getStatusLine = () => {
+      const weatherLine =
+        weatherTempC != null ? `${weatherTempC}°C` : "-- °C";
       const tz = process.env.TIMEZONE || "America/Los_Angeles";
       const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
-      const line1 = `${timeStr}  ${battery}`;
+      const line2 = `${timeStr}  ${battery}`;
       const spyLine =
         spyPriceUsd != null
           ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
           : "SPY --";
-      // Support both OpenResponses (input/output) and OpenAI/OpenClaw (prompt/completion) naming
-      const inTok = lastUsage?.input_tokens ?? lastUsage?.prompt_tokens;
-      const outTok = lastUsage?.output_tokens ?? lastUsage?.completion_tokens;
-      const usageLine =
-        inTok != null || outTok != null
-          ? `Tok: ${inTok ?? "--"} in ${outTok ?? "--"} out`
-          : "";
-      const lines = usageLine ? [usageLine, line1, spyLine] : [line1, spyLine];
-      return lines.join("\n");
+      return `${weatherLine}\n${line2}\n${spyLine}`;
     };
 
     const DIVIDER = "---------------------";
@@ -536,8 +548,7 @@ class OpenClawBridgeServer extends AppServer {
           onDone: () => {
             // Continue rendering remaining words
           },
-          onCompleted: (payload) => {
-            if (payload?.usage) lastUsage = payload.usage;
+          onCompleted: () => {
             streamComplete = true;
             if (responseBuffer.length === 0) {
               currentSendIsCopilot = false;
@@ -794,7 +805,9 @@ app.get("/debug", pushRoutes.handleDebug);
 
 server.start().then(() => {
   fetchSpyPrice();
+  fetchWestwoodWeather();
   setInterval(fetchSpyPrice, 60_000);
+  setInterval(fetchWestwoodWeather, 60_000);
 }).catch((err) => {
   console.error("Failed to start server:", err);
   process.exit(1);
