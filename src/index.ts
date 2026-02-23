@@ -78,21 +78,21 @@ let lastAnswer = "";
 let spyPriceUsd: number | null = null;
 let spyChangePercent: number | null = null;
 
-const YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=SPY";
+/** Free SPY quote API (no key required). */
+const SPY_QUOTE_URL = "https://stockprices.dev/api/etfs/SPY";
 
 async function fetchSpyPrice(): Promise<void> {
   try {
-    const res = await fetch(YAHOO_QUOTE_URL, {
+    const res = await fetch(SPY_QUOTE_URL, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; MentraOpenClaw/1.0)" },
     });
     if (!res.ok) return;
     const data = (await res.json()) as {
-      quoteResponse?: { result?: Array<{ regularMarketPrice?: number; regularMarketChangePercent?: number }> };
+      Price?: number;
+      ChangePercentage?: number;
     };
-    const quote = data?.quoteResponse?.result?.[0];
-    if (!quote) return;
-    const price = quote.regularMarketPrice;
-    const change = quote.regularMarketChangePercent;
+    const price = data?.Price;
+    const change = data?.ChangePercentage;
     if (typeof price === "number") spyPriceUsd = price;
     if (typeof change === "number") spyChangePercent = change;
   } catch {
@@ -188,8 +188,9 @@ class OpenClawBridgeServer extends AppServer {
         spyPriceUsd != null
           ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
           : "SPY --";
-      const inTok = lastUsage?.input_tokens;
-      const outTok = lastUsage?.output_tokens;
+      // Support both OpenResponses (input/output) and OpenAI/OpenClaw (prompt/completion) naming
+      const inTok = lastUsage?.input_tokens ?? lastUsage?.prompt_tokens;
+      const outTok = lastUsage?.output_tokens ?? lastUsage?.completion_tokens;
       const usageLine =
         inTok != null || outTok != null
           ? `Tok: ${inTok ?? "--"} in ${outTok ?? "--"} out`

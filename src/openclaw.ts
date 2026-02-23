@@ -27,11 +27,15 @@ export interface OutputTextDelta {
   [key: string]: unknown;
 }
 
-/** Token usage from OpenResponses response (when provider reports it). */
+/** Token usage from OpenResponses/OpenClaw response (when provider reports it). Supports both naming conventions. */
 export interface Usage {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  /** OpenAI/OpenClaw style (same as input_tokens). */
+  prompt_tokens?: number;
+  /** OpenAI/OpenClaw style (same as output_tokens). */
+  completion_tokens?: number;
 }
 
 /** Payload for response.completed SSE event. */
