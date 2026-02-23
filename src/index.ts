@@ -222,7 +222,7 @@ class OpenClawBridgeServer extends AppServer {
       }
 
       // Update ScrollView and display
-      responseView.setContent(textToShow);
+      responseView.setContent(textToShow, { breakMode: 'strict-word' });
       responseView.scrollToBottom();
       displayResponseView();
 
@@ -309,7 +309,7 @@ class OpenClawBridgeServer extends AppServer {
       if (!display) return; // Nothing to show
 
       // Use ScrollView for proper wrapping and scrolling
-      transcriptView.setContent(`${getStatusLine()}\n${DIVIDER}\n${display}`);
+      transcriptView.setContent(`${getStatusLine()}\n${DIVIDER}\n${display}`, { breakMode: 'strict-word' });
       transcriptView.scrollToBottom();
       displayTranscriptView();
     };
