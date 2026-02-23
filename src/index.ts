@@ -446,7 +446,27 @@ class OpenClawBridgeServer extends AppServer {
 
     const unsubHeadPosition = session.events.onHeadPosition((data) => {
       if (data.position !== "down") return;
-      if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
+
+      if (state === SessionState.STREAMING) {
+        stopWordRenderer();
+        responseBuffer = "";
+        renderedWordCount = 0;
+        streamComplete = false;
+        responseView.clear();
+        state = SessionState.IDLE;
+        lastAnswer = "";
+        showWelcome();
+        return;
+      }
+
+      if (state === SessionState.IDLE && lastAnswer) {
+        lastAnswer = "";
+        responseView.clear();
+        showWelcome();
+        return;
+      }
+
+      if (state === SessionState.SENDING) return;
 
       const parts = [...transcriptSegments];
       if (currentInterim) parts.push(currentInterim);
