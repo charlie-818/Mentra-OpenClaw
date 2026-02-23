@@ -492,23 +492,23 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
-      // Head down while listening without saying anything - go back to welcome
-      if (state === SessionState.LISTENING) {
-        state = SessionState.IDLE;
-        showWelcome();
-        return;
-      }
-
       if (state === SessionState.SENDING) return;
 
+      // Check if there are any transcribed words
       const parts = [...transcriptSegments];
       if (currentInterim) parts.push(currentInterim);
       const prompt = parts.join(" ").trim();
 
-      if (prompt) {
-        currentInterim = "";
-        lastInterimTriggerText = "";
-        sendToOpenClaw(prompt);
+      // Head down while listening/dictating - submit if words, else go back to welcome
+      if (state === SessionState.LISTENING || state === SessionState.DICTATING) {
+        if (prompt) {
+          currentInterim = "";
+          lastInterimTriggerText = "";
+          sendToOpenClaw(prompt);
+        } else {
+          state = SessionState.IDLE;
+          showWelcome();
+        }
       }
     });
 
