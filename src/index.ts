@@ -42,6 +42,7 @@ if (!MENTRAOS_API_KEY) {
 /** Session state machine */
 enum SessionState {
   IDLE = "IDLE",
+  LISTENING = "LISTENING",
   DICTATING = "DICTATING",
   SENDING = "SENDING",
   STREAMING = "STREAMING",
@@ -272,10 +273,12 @@ class OpenClawBridgeServer extends AppServer {
       const final = transcriptSegments.join(" ").trim();
       const display = currentInterim
         ? (final ? `${final} ${currentInterim}` : currentInterim)
-        : (final || WELCOME_MESSAGE);
+        : final;
+
+      if (!display) return; // Nothing to show
 
       // Use ScrollView for proper wrapping and scrolling
-      transcriptView.setContent(display);
+      transcriptView.setContent(`${getStatusLine()}\n${DIVIDER}\n${display}`);
       transcriptView.scrollToBottom();
       displayTranscriptView();
     };
@@ -370,8 +373,8 @@ class OpenClawBridgeServer extends AppServer {
     const unsubTranscription = session.events.onTranscription((data) => {
       const text = data.text?.trim() ?? "";
 
-      // Ignore transcription while sending/streaming
-      if (state === SessionState.SENDING || state === SessionState.STREAMING) {
+      // Ignore transcription while idle (welcome showing), sending, or streaming
+      if (state === SessionState.IDLE || state === SessionState.SENDING || state === SessionState.STREAMING) {
         return;
       }
 
@@ -398,8 +401,8 @@ class OpenClawBridgeServer extends AppServer {
           }
         }
 
-        // No trigger, just update display with interim
-        if (state === SessionState.IDLE) {
+        // Transition from LISTENING to DICTATING when user starts talking
+        if (state === SessionState.LISTENING) {
           state = SessionState.DICTATING;
         }
         showTranscript();
@@ -448,8 +451,8 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
-      // No trigger - accumulate segment
-      if (state === SessionState.IDLE) {
+      // Transition from LISTENING to DICTATING when user starts talking
+      if (state === SessionState.LISTENING) {
         state = SessionState.DICTATING;
       }
       transcriptSegments.push(text);
@@ -457,6 +460,17 @@ class OpenClawBridgeServer extends AppServer {
     });
 
     const unsubHeadPosition = session.events.onHeadPosition((data) => {
+      // Head up: start listening for transcription
+      if (data.position === "up") {
+        if (state === SessionState.IDLE) {
+          stopGreetingRenderer();
+          state = SessionState.LISTENING;
+          session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
+        }
+        return;
+      }
+
+      // Head down: various actions
       if (data.position !== "down") return;
 
       if (state === SessionState.STREAMING) {
@@ -474,6 +488,13 @@ class OpenClawBridgeServer extends AppServer {
       if (state === SessionState.IDLE && lastAnswer) {
         lastAnswer = "";
         responseView.clear();
+        showWelcome();
+        return;
+      }
+
+      // Head down while listening without saying anything - go back to welcome
+      if (state === SessionState.LISTENING) {
+        state = SessionState.IDLE;
         showWelcome();
         return;
       }
