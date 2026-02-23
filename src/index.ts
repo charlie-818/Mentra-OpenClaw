@@ -90,8 +90,14 @@ let lastAnswer = "";
 let spyPriceUsd: number | null = null;
 let spyChangePercent: number | null = null;
 
+/** Total 24h fees across all tokenized-stock pools (Vaulto staking). */
+let totalFees24h: number | null = null;
+
 /** Free SPY quote API (no key required). */
 const SPY_QUOTE_URL = "https://stockprices.dev/api/etfs/SPY";
+
+/** Vaulto staking yield / tokenized-stock pools (fees24h per pool). */
+const VAULTO_POOLS_URL = "https://stake.vaulto.ai/api/cache/tokenized-stock-pools";
 
 /** Westwood, LA weather (Open-Meteo, no key required). */
 const WESTWOOD_WEATHER_URL =
@@ -113,6 +119,22 @@ async function fetchSpyPrice(): Promise<void> {
     const change = data?.ChangePercentage;
     if (typeof price === "number") spyPriceUsd = price;
     if (typeof change === "number") spyChangePercent = change;
+  } catch {
+    // Leave existing cache unchanged
+  }
+}
+
+async function fetchStakingFees(): Promise<void> {
+  try {
+    const res = await fetch(VAULTO_POOLS_URL, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MentraOpenClaw/1.0)" },
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { pools?: Array<{ fees24h?: number }> };
+    const pools = data?.pools;
+    if (!Array.isArray(pools)) return;
+    const total = pools.reduce((sum, p) => sum + (typeof p.fees24h === "number" ? p.fees24h : 0), 0);
+    totalFees24h = total;
   } catch {
     // Leave existing cache unchanged
   }
@@ -227,10 +249,15 @@ class OpenClawBridgeServer extends AppServer {
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
       const tempStr = weatherTempC != null ? `${weatherTempC}°C` : "-- °C";
       const line1 = `${timeStr}  ${battery}  ${tempStr}`;
-      const spyLine =
+      const spyPart =
         spyPriceUsd != null
           ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
           : "SPY --";
+      const feesPart =
+        totalFees24h != null
+          ? `  Fees24h $${totalFees24h.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+          : "";
+      const spyLine = spyPart + feesPart;
       return `${line1}\n${spyLine}`;
     };
 
@@ -900,8 +927,10 @@ app.get("/debug", pushRoutes.handleDebug);
 
 server.start().then(() => {
   fetchSpyPrice();
+  fetchStakingFees();
   fetchWestwoodWeather();
   setInterval(fetchSpyPrice, 60_000);
+  setInterval(fetchStakingFees, 60_000);
   setInterval(fetchWestwoodWeather, 60_000);
 }).catch((err) => {
   console.error("Failed to start server:", err);
