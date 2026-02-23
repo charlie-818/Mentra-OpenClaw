@@ -325,7 +325,7 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               state = SessionState.STREAMING;
             }
-            responseBuffer += delta.replace(/\*\*/g, "").replace(/#+/g, "");
+            responseBuffer += delta.replace(/\*/g, "").replace(/#+/g, "").replace(/"/g, "");
             startWordRenderer();
           },
           onDone: () => {
