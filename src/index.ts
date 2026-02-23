@@ -111,13 +111,10 @@ class OpenClawBridgeServer extends AppServer {
     let glassesBatteryLevel: number | null = null;
 
     const getStatusLine = () => {
-      const now = new Date();
-      const hours = now.getHours();
-      const minutes = now.getMinutes().toString().padStart(2, "0");
-      const ampm = hours >= 12 ? "PM" : "AM";
-      const hour12 = (hours % 12 || 12).toString();
+      const tz = process.env.TIMEZONE || "America/Los_Angeles";
+      const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
-      return `${hour12}:${minutes} ${ampm}  ${notificationCount} notifs  ${battery}`;
+      return `${timeStr}  ${notificationCount} notifs  ${battery}`;
     };
 
     const DIVIDER = "---------------------";
@@ -495,8 +492,9 @@ class OpenClawBridgeServer extends AppServer {
       }
     });
 
-    const unsubGlassesBattery = session.events.onGlassesBattery((data) => {
-      glassesBatteryLevel = data.level;
+    glassesBatteryLevel = session.device.state.batteryLevel.value;
+    const unsubGlassesBattery = session.device.state.batteryLevel.onChange((level) => {
+      glassesBatteryLevel = level;
     });
 
     const unsubPhoneNotifications = session.events.onPhoneNotifications(() => {
