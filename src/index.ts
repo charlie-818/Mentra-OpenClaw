@@ -444,9 +444,25 @@ class OpenClawBridgeServer extends AppServer {
       showTranscript();
     });
 
+    const unsubHeadPosition = session.events.onHeadPosition((data) => {
+      if (data.position !== "down") return;
+      if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
+
+      const parts = [...transcriptSegments];
+      if (currentInterim) parts.push(currentInterim);
+      const prompt = parts.join(" ").trim();
+
+      if (prompt) {
+        currentInterim = "";
+        lastInterimTriggerText = "";
+        sendToOpenClaw(prompt);
+      }
+    });
+
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
       unsubTranscription();
+      unsubHeadPosition();
       stopWordRenderer();
       stopGreetingRenderer();
     });
