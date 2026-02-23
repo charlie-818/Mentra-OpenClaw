@@ -73,6 +73,27 @@ const COPILOT_TOGGLE_PHRASES = [
 
 let lastAnswer = "";
 
+/** Process-level ETH price cache (CoinGecko). */
+let ethPriceUsd: number | null = null;
+let eth24hChange: number | null = null;
+
+const COINGECKO_ETH_URL =
+  "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true";
+
+async function fetchEthPrice(): Promise<void> {
+  try {
+    const res = await fetch(COINGECKO_ETH_URL);
+    if (!res.ok) return;
+    const data = (await res.json()) as { ethereum?: { usd?: number; usd_24h_change?: number } };
+    const price = data?.ethereum?.usd;
+    const change = data?.ethereum?.usd_24h_change;
+    if (typeof price === "number") ethPriceUsd = price;
+    if (typeof change === "number") eth24hChange = change;
+  } catch {
+    // Leave existing cache unchanged
+  }
+}
+
 if (!MENTRAOS_API_KEY) {
   console.error("MENTRAOS_API_KEY environment variable is required");
   process.exit(1);
@@ -153,7 +174,12 @@ class OpenClawBridgeServer extends AppServer {
       const tz = process.env.TIMEZONE || "America/Los_Angeles";
       const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
-      return `${timeStr}  ${battery}`;
+      const line1 = `${timeStr}  ${battery}`;
+      const ethLine =
+        ethPriceUsd != null
+          ? `ETH $${ethPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${eth24hChange != null ? ` (24h ${eth24hChange >= 0 ? "+" : ""}${eth24hChange.toFixed(1)}%)` : ""}`
+          : "ETH --";
+      return `${line1}\n${ethLine}`;
     };
 
     const DIVIDER = "---------------------";
@@ -748,7 +774,10 @@ app.get("/copilot", pushRoutes.handleCopilotGet);
 app.get("/status", pushRoutes.handleStatus);
 app.get("/debug", pushRoutes.handleDebug);
 
-server.start().catch((err) => {
+server.start().then(() => {
+  fetchEthPrice();
+  setInterval(fetchEthPrice, 60_000);
+}).catch((err) => {
   console.error("Failed to start server:", err);
   process.exit(1);
 });
