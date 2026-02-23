@@ -107,14 +107,15 @@ class OpenClawBridgeServer extends AppServer {
     let greetingIndex = 0;
 
     // Status bar state
-    let notificationCount = 0;
     let glassesBatteryLevel: number | null = null;
+    let phoneBatteryLevel: number | null = null;
 
     const getStatusLine = () => {
       const tz = process.env.TIMEZONE || "America/Los_Angeles";
       const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
-      const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
-      return `${timeStr}  ${notificationCount} notifs  ${battery}`;
+      const glasses = glassesBatteryLevel !== null ? `G:${glassesBatteryLevel}%` : "G:--";
+      const phone = phoneBatteryLevel !== null ? `P:${phoneBatteryLevel}%` : "P:--";
+      return `${timeStr}  ${glasses}  ${phone}`;
     };
 
     const DIVIDER = "---------------------";
@@ -497,12 +498,8 @@ class OpenClawBridgeServer extends AppServer {
       glassesBatteryLevel = level;
     });
 
-    const unsubPhoneNotifications = session.events.onPhoneNotifications(() => {
-      notificationCount++;
-    });
-
-    const unsubPhoneNotificationDismissed = session.events.onPhoneNotificationDismissed(() => {
-      if (notificationCount > 0) notificationCount--;
+    const unsubPhoneBattery = session.events.onPhoneBattery((data) => {
+      phoneBatteryLevel = data.level;
     });
 
     session.events.onDisconnected(() => {
@@ -510,8 +507,7 @@ class OpenClawBridgeServer extends AppServer {
       unsubTranscription();
       unsubHeadPosition();
       unsubGlassesBattery();
-      unsubPhoneNotifications();
-      unsubPhoneNotificationDismissed();
+      unsubPhoneBattery();
       stopWordRenderer();
       stopGreetingRenderer();
     });
