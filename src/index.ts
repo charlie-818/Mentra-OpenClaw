@@ -26,9 +26,11 @@ const formatResponseText = (text: string): string => {
   return text
     // Insert space where asterisks sit between non-whitespace (avoid fusing words)
     .replace(/(\S)\*+(\S)/g, "$1 $2")
-    // Strip markdown formatting
+    // Strip markdown formatting (insert space at boundaries so words don't fuse)
     .replace(/\*+/g, "")
+    .replace(/(\S)#+\s*(\S)/g, "$1 $2")
     .replace(/#+\s*/g, "")
+    .replace(/(\S)"(\S)/g, "$1 $2")
     .replace(/"/g, "")
     // Normalize whitespace (collapse multiple spaces)
     .replace(/  +/g, " ")
@@ -172,15 +174,10 @@ class OpenClawBridgeServer extends AppServer {
     let pushTokens: string[] = [];
     let pushRenderedWordCount = 0;
     let pushWordRenderTimer: ReturnType<typeof setTimeout> | null = null;
-    let pushScrollEndTimeout: ReturnType<typeof setTimeout> | null = null;
     const stopPushScroll = () => {
       if (pushWordRenderTimer) {
         clearTimeout(pushWordRenderTimer);
         pushWordRenderTimer = null;
-      }
-      if (pushScrollEndTimeout) {
-        clearTimeout(pushScrollEndTimeout);
-        pushScrollEndTimeout = null;
       }
     };
 
@@ -326,13 +323,7 @@ class OpenClawBridgeServer extends AppServer {
         } else {
           renderNextPushWord();
         }
-
-        pushScrollEndTimeout = setTimeout(() => {
-          stopPushScroll();
-          if (state === SessionState.IDLE) showWelcome();
-          else if (state === SessionState.LISTENING || state === SessionState.DICTATING) showTranscript();
-          else if (state === SessionState.SENDING || state === SessionState.STREAMING) displayResponseView();
-        }, durationMs);
+        // Keep push text on display; do not restore welcome/transcript/response
       },
     };
     registry.register(entry);
@@ -609,15 +600,36 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               setState(SessionState.STREAMING);
             }
+            // Ensure space between chunks so words don't concatenate when stream sends "word1" then "word2"
+            if (
+              responseBuffer.length > 0 &&
+              !/\s$/.test(responseBuffer) &&
+              delta.length > 0 &&
+              !/^\s/.test(delta)
+            ) {
+              responseBuffer += " ";
+            }
             responseBuffer += delta;
             // Format the entire buffer for proper list display
             responseBuffer = formatResponseText(responseBuffer);
+            if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+              session.logger.info(
+                { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
+                "onDelta"
+              );
+            }
             startWordRenderer();
           },
           onDone: () => {
             // Continue rendering remaining words
           },
           onCompleted: () => {
+            if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+              session.logger.info(
+                { responseLen: responseBuffer.length, tail: responseBuffer.slice(-200) },
+                "stream completed"
+              );
+            }
             streamComplete = true;
             if (responseBuffer.length === 0) {
               currentSendIsCopilot = false;
