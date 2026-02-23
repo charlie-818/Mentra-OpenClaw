@@ -40,6 +40,10 @@ const formatResponseText = (text: string): string => {
     .trim();
 };
 
+/** Join viewport lines for display, reinserting space at wrapped word boundaries so words don't run together on the glasses. */
+const joinViewportLinesWithSpaces = (lines: string[]): string =>
+  lines.join("\n").replace(/([^\s])\n(?=[^\s])/g, "$1 \n");
+
 /** G1 display max lines */
 const G1_MAX_LINES = 5;
 
@@ -297,7 +301,7 @@ class OpenClawBridgeServer extends AppServer {
     /** Display current rendered text on ScrollView */
     const displayResponseView = () => {
       const viewport = responseView.getViewport();
-      const text = viewport.lines.join("\n");
+      const text = joinViewportLinesWithSpaces(viewport.lines);
       session.layouts.showTextWall(text, { durationMs: -1 });
     };
 
@@ -419,7 +423,7 @@ class OpenClawBridgeServer extends AppServer {
     /** Display transcript ScrollView */
     const displayTranscriptView = () => {
       const viewport = transcriptView.getViewport();
-      const text = viewport.lines.join("\n");
+      const text = joinViewportLinesWithSpaces(viewport.lines);
       session.layouts.showTextWall(text, { durationMs: -1 });
     };
 
