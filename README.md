@@ -2,6 +2,8 @@
 
 Connects **Even G1 glasses** (running MentraOS) to your **OpenClaw** gateway: speak into the glasses to send prompts to OpenClaw, and stream OpenClaw’s responses back as text on the glasses.
 
+**Quick start:** Clone the repo, `npm install`, `cp .env.example .env`, then set `PACKAGE_NAME`, `MENTRAOS_API_KEY`, `OPENCLAW_GATEWAY_URL`, and `OPENCLAW_GATEWAY_TOKEN` in `.env`. Register your app in [MentraOS](https://console.mentra.glass) with the webhook URL pointing at this bridge (e.g. `https://your-host/webhook`). Run `npm run dev`. See [Setup](#setup) and [DEVELOPMENT.md](DEVELOPMENT.md) for details.
+
 ## Two ways to connect G1 to OpenClaw
 
 - **This repo (minimal bridge)** — Voice to OpenClaw, streaming text on glasses. Uses OpenClaw **HTTP Responses API** (`/v1/responses`). One port (3000). Easiest setup when you only need direct voice chat.
@@ -58,6 +60,7 @@ cp .env.example .env
 | `OPENCLAW_GATEWAY_TOKEN` | Bearer token for the gateway |
 | `OPENCLAW_AGENT_ID` | Optional; agent id (default `main`) |
 | `OPENCLAW_TRIGGER_WORDS` | Optional; comma-separated trigger phrases to send the transcript to OpenClaw (e.g. `go,send,execute,big mac`). Dictation is only sent when you say one of these. |
+| `OPENCLAW_CLEAR_WORDS` | Optional; comma-separated phrases to clear or cancel (e.g. `clear,stop,reset,cancel`). |
 
 ### 3. MentraOS (glasses) side
 
@@ -85,6 +88,10 @@ cp .env.example .env
    ```
 2. Ensure you have a valid **gateway token** (or password) and set `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_TOKEN` in `.env`.
 
+### 5. Security
+
+Do not commit `.env` or any real API keys or tokens. Use environment variables only; see [SECURITY.md](SECURITY.md).
+
 ## Run
 
 - **Development** (watch mode):
@@ -109,6 +116,18 @@ The bridge listens on `PORT` and exposes:
 3. OpenClaw’s **streaming** response is shown on the glasses (throttled to ~4 updates per second to respect display limits).
 4. If the user speaks again while a response is in progress, the glasses show “Busy. Wait for the current response.”
 
+## Repository structure
+
+- **`src/`** — Bridge app: [index.ts](src/index.ts) (server, webhook, Mentra SDK), [openclaw.ts](src/openclaw.ts) (OpenClaw HTTP client).
+- **`scripts/`** — Check, tests, deploy (Railway), Cloudflare tunnel setup, HexMentraBridge launcher.
+- **`docs/`** — OpenClaw and gateway debugging/setup guides; see [docs/README.md](docs/README.md) for an index.
+- **Config:** `package.json`, `tsconfig.json`, [.env.example](.env.example), `railway.json`, `nixpacks.toml`.
+
+## Deployment
+
+- **Deploying the bridge:** The repo includes [railway.json](railway.json) and [nixpacks.toml](nixpacks.toml) for [Railway](https://railway.app). Production environment variables are set in Railway (dashboard or `railway variables set`), not from repo `.env`. For a one-shot deploy from this repo, see [scripts/deploy-railway.sh](scripts/deploy-railway.sh) (requires Railway CLI and the required env vars).
+- **Exposing OpenClaw:** If the bridge runs remotely (e.g. on Railway) and OpenClaw is on your machine, expose it with a tunnel. [scripts/setup-cloudflare-tunnel.sh](scripts/setup-cloudflare-tunnel.sh) sets up a Cloudflare Tunnel and prints the URL to use as `OPENCLAW_GATEWAY_URL`.
+
 ## Running HexMentraBridge
 
 To use the full-featured bridge (copilot, push API, transcripts) with the same OpenClaw gateway and MentraOS app:
@@ -122,4 +141,4 @@ To use the full-featured bridge (copilot, push API, transcripts) with the same O
 
 ## License
 
-MIT
+[LICENSE](LICENSE) (MIT)
