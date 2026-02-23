@@ -189,11 +189,11 @@ class OpenClawBridgeServer extends AppServer {
 
     /** Render next word from buffer */
     const renderNextWord = () => {
-      // Get all words from buffer
-      const allWords = responseBuffer.split(/\s+/).filter(Boolean);
+      // Split into tokens preserving newlines as separate tokens
+      const tokens = responseBuffer.split(/(\n)| +/).filter(Boolean);
 
-      if (renderedWordCount >= allWords.length) {
-        // No more words to render
+      if (renderedWordCount >= tokens.length) {
+        // No more tokens to render
         wordRenderTimer = null;
         if (streamComplete) {
           lastAnswer = responseBuffer;
@@ -205,9 +205,21 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
-      // Build text from words rendered so far + next word
+      // Build text from tokens rendered so far + next token
       renderedWordCount++;
-      const textToShow = allWords.slice(0, renderedWordCount).join(" ");
+      // Join tokens, adding space between words but not around newlines
+      let textToShow = "";
+      for (let i = 0; i < renderedWordCount; i++) {
+        const token = tokens[i];
+        if (token === "\n") {
+          textToShow += "\n";
+        } else {
+          if (textToShow.length > 0 && !textToShow.endsWith("\n")) {
+            textToShow += " ";
+          }
+          textToShow += token;
+        }
+      }
 
       // Update ScrollView and display
       responseView.setContent(textToShow);
