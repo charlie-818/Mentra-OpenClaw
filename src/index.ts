@@ -1,4 +1,5 @@
 import "dotenv/config";
+import express from "express";
 import { AppServer, AppSession } from "@mentra/sdk";
 import {
   createG1Toolkit,
@@ -8,6 +9,10 @@ import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
 } from "./openclaw.js";
+import * as registry from "./session-registry.js";
+import * as pushRoutes from "./push-routes.js";
+import { appendTranscript } from "./transcript-log.js";
+import { isFilterConfigured, classifyTranscript } from "./copilot-filter.js";
 
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-bridge";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -50,6 +55,17 @@ const CLEAR_WORDS: string[] = (() => {
   const raw = process.env.OPENCLAW_CLEAR_WORDS ?? "clear,stop,reset,cancel";
   return raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
 })();
+
+/** Copilot voice toggle phrases (normalized). */
+const COPILOT_TOGGLE_PHRASES = [
+  "copilot mode",
+  "copilot on",
+  "copilot off",
+  "copilot an",
+  "copilot aus",
+  "new session",
+  "neue session",
+];
 
 let lastAnswer = "";
 
@@ -172,6 +188,104 @@ class OpenClawBridgeServer extends AppServer {
       renderNextGreetingLetter();
     };
 
+    const entry: registry.SessionEntry = {
+      session,
+      sessionId,
+      userId,
+      state: SessionState.IDLE as registry.SessionStateLabel,
+      copilot: false,
+      lastTranscriptAt: null,
+      copilotPipeline: { totalFiltered: 0, totalPassed: 0, bufferSize: 0, inflight: false },
+      requestListening(listening: boolean) {
+        if (listening && state === SessionState.IDLE) {
+          setState(SessionState.LISTENING);
+          stopGreetingRenderer();
+          session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
+        } else if (!listening && (state === SessionState.LISTENING || state === SessionState.DICTATING)) {
+          setState(SessionState.IDLE);
+          showWelcome();
+        }
+      },
+    };
+    registry.register(entry);
+
+    const setState = (s: SessionState) => {
+      state = s;
+      entry.state = s as registry.SessionStateLabel;
+      if (s === SessionState.IDLE) setImmediate(tryProcessPendingCopilotBatch);
+    };
+
+    const COPILOT_DEBOUNCE_MS = 3000;
+    let copilotBuffer: string[] = [];
+    const recentCopilotBatches: string[] = [];
+    const COPILOT_CONTEXT_BATCHES = 5;
+    let copilotDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingCopilotBatch: string | null = null;
+    let pendingCopilotContext: string[] = [];
+    let currentSendIsCopilot = false;
+
+    const clearCopilotDebounce = () => {
+      if (copilotDebounceTimer) {
+        clearTimeout(copilotDebounceTimer);
+        copilotDebounceTimer = null;
+      }
+    };
+
+    const processCopilotBatch = async (batch: string, contextBatches: string[]) => {
+      if (state === SessionState.SENDING || state === SessionState.STREAMING) {
+        pendingCopilotBatch = batch;
+        pendingCopilotContext = [...contextBatches];
+        return;
+      }
+      if (!batch.trim()) return;
+      entry.copilotPipeline.inflight = true;
+      const contextStr = contextBatches.map((b) => b.trim()).join("\n");
+      if (isFilterConfigured()) {
+        const tag = await classifyTranscript(batch, contextStr);
+        appendTranscript("copilot", batch, tag);
+        if (tag === "SKIP") {
+          entry.copilotPipeline.totalFiltered++;
+          entry.copilotPipeline.inflight = false;
+          return;
+        }
+        entry.copilotPipeline.totalPassed++;
+      } else {
+        appendTranscript("copilot", batch, null);
+        entry.copilotPipeline.totalPassed++;
+      }
+      const context = contextBatches.length > 0
+        ? `Recent context:\n${contextStr}\n\nCurrent: ${batch}`
+        : batch;
+      const message = contextBatches.length > 0
+        ? `⚠️ G1 COPILOT MODE: The user is having a conversation nearby. Context (last ${contextBatches.length} batches) + current:\n\n${context}`
+        : `⚠️ G1 COPILOT MODE: The user is having a conversation nearby.\n\n${batch}`;
+      currentSendIsCopilot = true;
+      sendToOpenClaw(message);
+      entry.copilotPipeline.inflight = false;
+    };
+
+    const flushCopilotBuffer = () => {
+      clearCopilotDebounce();
+      const batch = copilotBuffer.join(" ").trim();
+      copilotBuffer = [];
+      entry.copilotPipeline.bufferSize = copilotBuffer.length;
+      if (!batch) return;
+      while (recentCopilotBatches.length >= COPILOT_CONTEXT_BATCHES) {
+        recentCopilotBatches.shift();
+      }
+      recentCopilotBatches.push(batch);
+      processCopilotBatch(batch, recentCopilotBatches.slice(0, -1));
+    };
+
+    const tryProcessPendingCopilotBatch = () => {
+      if (pendingCopilotBatch === null || state !== SessionState.IDLE) return;
+      const batch = pendingCopilotBatch;
+      const context = pendingCopilotContext;
+      pendingCopilotBatch = null;
+      pendingCopilotContext = [];
+      processCopilotBatch(batch, context);
+    };
+
     /** Stop word renderer */
     const stopWordRenderer = () => {
       if (wordRenderTimer) {
@@ -196,11 +310,14 @@ class OpenClawBridgeServer extends AppServer {
         // No more tokens to render
         wordRenderTimer = null;
         if (streamComplete) {
-          lastAnswer = responseBuffer;
-          state = SessionState.IDLE;
+          const noReply = currentSendIsCopilot && responseBuffer.trim().toUpperCase() === "NO_REPLY";
+          currentSendIsCopilot = false;
+          if (!noReply) lastAnswer = responseBuffer;
+          setState(SessionState.IDLE);
           responseBuffer = "";
           renderedWordCount = 0;
           streamComplete = false;
+          if (noReply) showWelcome();
         }
         return;
       }
@@ -269,13 +386,22 @@ class OpenClawBridgeServer extends AppServer {
       return CLEAR_WORDS.some((c) => s === c || s.endsWith(" " + c));
     };
 
+    /** Check for copilot voice command; returns "on" | "off" | "toggle" | null */
+    const getCopilotVoiceCommand = (text: string): "on" | "off" | "toggle" | null => {
+      const s = text.trim().toLowerCase();
+      if (s.includes("copilot on") || s.includes("copilot an")) return "on";
+      if (s.includes("copilot off") || s.includes("copilot aus")) return "off";
+      if (s.includes("copilot mode") || s.includes("new session") || s.includes("neue session")) return "toggle";
+      return null;
+    };
+
     /** Clear transcript and reset to idle */
     const clearTranscript = (fromInterim = false) => {
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
       clearedFromInterim = fromInterim;
-      state = SessionState.IDLE;
+      setState(SessionState.IDLE);
       transcriptView.clear();
       session.layouts.showTextWall("Cleared.", { durationMs: 1000 });
       setTimeout(showWelcome, 1000);
@@ -327,7 +453,7 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
-      state = SessionState.SENDING;
+      setState(SessionState.SENDING);
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
@@ -353,7 +479,7 @@ class OpenClawBridgeServer extends AppServer {
         {
           onDelta: (delta) => {
             if (state !== SessionState.STREAMING) {
-              state = SessionState.STREAMING;
+              setState(SessionState.STREAMING);
             }
             responseBuffer += delta;
             // Format the entire buffer for proper list display
@@ -366,15 +492,17 @@ class OpenClawBridgeServer extends AppServer {
           onCompleted: () => {
             streamComplete = true;
             if (responseBuffer.length === 0) {
+              currentSendIsCopilot = false;
               session.layouts.showTextWall("Done.", { durationMs: 2000 });
               setTimeout(() => {
-                state = SessionState.IDLE;
+                setState(SessionState.IDLE);
                 showWelcome();
               }, 2000);
             }
             // Otherwise renderNextWord handles transition when done
           },
           onFailed: (err) => {
+            currentSendIsCopilot = false;
             stopWordRenderer();
             const message = err instanceof Error ? err.message : String(err);
             session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
@@ -383,7 +511,7 @@ class OpenClawBridgeServer extends AppServer {
               "OpenClaw request failed"
             );
             setTimeout(() => {
-              state = SessionState.IDLE;
+              setState(SessionState.IDLE);
               responseBuffer = "";
               renderedWordCount = 0;
               streamComplete = false;
@@ -422,9 +550,9 @@ class OpenClawBridgeServer extends AppServer {
           return;
         }
 
-        // Check for trigger in interim for faster response
+        // Check for trigger in interim for faster response (skip when copilot on)
         const trigger = getTriggerMatch(text);
-        if (trigger) {
+        if (trigger && !entry.copilot) {
           const payload = buildPayload(text, trigger);
           if (payload) {
             lastInterimTriggerText = text.toLowerCase().trim();
@@ -436,7 +564,7 @@ class OpenClawBridgeServer extends AppServer {
 
         // Transition from LISTENING to DICTATING when user starts talking
         if (state === SessionState.LISTENING) {
-          state = SessionState.DICTATING;
+          setState(SessionState.DICTATING);
         }
         showTranscript();
         return;
@@ -448,6 +576,7 @@ class OpenClawBridgeServer extends AppServer {
       if (!text) return;
 
       session.logger.info(`Final transcription: ${text}`);
+      entry.lastTranscriptAt = Date.now();
 
       // Check if we already cleared from interim - skip matching final
       if (clearedFromInterim) {
@@ -471,6 +600,34 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
+      const copilotCmd = getCopilotVoiceCommand(text);
+      if (copilotCmd !== null) {
+        if (copilotCmd === "toggle") {
+          entry.copilot = !entry.copilot;
+        } else if (copilotCmd === "on") {
+          entry.copilot = true;
+        } else {
+          entry.copilot = false;
+        }
+        session.layouts.showTextWall(
+          `Copilot ${entry.copilot ? "on" : "off"}.`,
+          { durationMs: 2000 }
+        );
+        setTimeout(showWelcome, 2000);
+        return;
+      }
+
+      // When copilot is on: accumulate in buffer and debounce; do not send on trigger
+      if (entry.copilot) {
+        copilotBuffer.push(text);
+        entry.copilotPipeline.bufferSize = copilotBuffer.length;
+        clearCopilotDebounce();
+        copilotDebounceTimer = setTimeout(flushCopilotBuffer, COPILOT_DEBOUNCE_MS);
+        transcriptSegments.push(text);
+        showTranscript();
+        return;
+      }
+
       // Check for trigger in final
       const trigger = getTriggerMatch(text);
       if (trigger) {
@@ -486,9 +643,10 @@ class OpenClawBridgeServer extends AppServer {
 
       // Transition from LISTENING to DICTATING when user starts talking
       if (state === SessionState.LISTENING) {
-        state = SessionState.DICTATING;
+        setState(SessionState.DICTATING);
       }
       transcriptSegments.push(text);
+      appendTranscript("normal", text);
       showTranscript();
     });
 
@@ -497,7 +655,7 @@ class OpenClawBridgeServer extends AppServer {
       if (data.position === "up") {
         if (state === SessionState.IDLE) {
           stopGreetingRenderer();
-          state = SessionState.LISTENING;
+          setState(SessionState.LISTENING);
           session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
         }
         return;
@@ -512,7 +670,7 @@ class OpenClawBridgeServer extends AppServer {
         renderedWordCount = 0;
         streamComplete = false;
         responseView.clear();
-        state = SessionState.IDLE;
+        setState(SessionState.IDLE);
         lastAnswer = "";
         showWelcome();
         return;
@@ -537,9 +695,15 @@ class OpenClawBridgeServer extends AppServer {
         if (prompt) {
           currentInterim = "";
           lastInterimTriggerText = "";
-          sendToOpenClaw(prompt);
+          if (entry.copilot) {
+            copilotBuffer.push(prompt);
+            entry.copilotPipeline.bufferSize = copilotBuffer.length;
+            flushCopilotBuffer();
+          } else {
+            sendToOpenClaw(prompt);
+          }
         } else {
-          state = SessionState.IDLE;
+          setState(SessionState.IDLE);
           showWelcome();
         }
       }
@@ -552,6 +716,8 @@ class OpenClawBridgeServer extends AppServer {
 
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
+      clearCopilotDebounce();
+      registry.unregister(sessionId);
       unsubTranscription();
       unsubHeadPosition();
       unsubGlassesBattery();
@@ -567,6 +733,16 @@ const server = new OpenClawBridgeServer({
   port: PORT,
   healthCheck: true,
 });
+
+const app = server.getExpressApp();
+app.use(express.json());
+app.post("/push", pushRoutes.handlePush);
+app.post("/push-bitmap", pushRoutes.handlePushBitmap);
+app.post("/mic", pushRoutes.handleMic);
+app.post("/copilot", pushRoutes.handleCopilotPost);
+app.get("/copilot", pushRoutes.handleCopilotGet);
+app.get("/status", pushRoutes.handleStatus);
+app.get("/debug", pushRoutes.handleDebug);
 
 server.start().catch((err) => {
   console.error("Failed to start server:", err);

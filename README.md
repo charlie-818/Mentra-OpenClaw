@@ -4,23 +4,15 @@ Connects **Even G1 glasses** (running MentraOS) to your **OpenClaw** gateway: sp
 
 **Quick start:** Clone the repo, `npm install`, `cp .env.example .env`, then set `PACKAGE_NAME`, `MENTRAOS_API_KEY`, `OPENCLAW_GATEWAY_URL`, and `OPENCLAW_GATEWAY_TOKEN` in `.env`. Register your app in [MentraOS](https://console.mentra.glass) with the webhook URL pointing at this bridge (e.g. `https://your-host/webhook`). Run `npm run dev`. See [Setup](#setup) and [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 
-## Two ways to connect G1 to OpenClaw
+## Features
 
-- **This repo (minimal bridge)** — Voice to OpenClaw, streaming text on glasses. Uses OpenClaw **HTTP Responses API** (`/v1/responses`). One port (3000). Easiest setup when you only need direct voice chat.
-- **[HexMentraBridge](https://github.com/johannboehme/HexMentraBridge)** — Full-featured bridge: same voice flow plus **copilot mode**, **push API** (reminders, bitmaps), **transcript logging**, **LLM pre-filter**, head-up mic toggle, etc. Uses OpenClaw **Gateway WebSocket**. Ports 3000 + 3001.
+- **Voice → OpenClaw → display** — Speak into the glasses; prompts are sent to OpenClaw and streaming responses appear on the display.
+- **Head gestures** — Look **up** to start recording your prompt; look **down** to send (or to clear and return to welcome). Trigger words (e.g. "send", "mac") also send.
+- **Copilot mode** — Say "copilot mode" or "copilot on/off" to toggle. In copilot mode, transcripts are batched (3s debounce) and optionally filtered by a cheap LLM (e.g. Haiku) before being sent to OpenClaw; the AI can reply with `NO_REPLY` to stay silent.
+- **Transcript logging** — All transcripts (normal and copilot) are appended to `transcripts/YYYY-MM-DD.md`.
+- **Push API** — Same port as the webhook: `POST /push`, `GET /status`, `GET /debug`, `POST /mic`, `POST /copilot`, `GET /copilot`. Optional `PUSH_TOKEN` for auth.
 
-**When to use which:** Use this repo for the simplest setup (HTTP only). Use HexMentraBridge when you want copilot, push, transcripts, or Tasker/WearOS integration.
-
-**Gateway:** The same OpenClaw instance can serve both. This repo needs `responses: { enabled: true }` and `OPENCLAW_GATEWAY_URL` (HTTP). HexMentraBridge needs `OPENCLAW_WS_URL=ws://...` (e.g. `ws://127.0.0.1:18789`) and `OPENCLAW_GW_TOKEN`.
-
-| This repo (.env) | HexMentraBridge (.env) |
-|------------------|-------------------------|
-| `OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789` | `OPENCLAW_WS_URL=ws://127.0.0.1:18789` (same host/port, `ws` scheme) |
-| `OPENCLAW_GATEWAY_TOKEN=...` | `OPENCLAW_GW_TOKEN=...` |
-| `PACKAGE_NAME`, `MENTRAOS_API_KEY` | Same names |
-| — | `PUSH_PORT`, `PUSH_BIND`, `PUSH_TOKEN`, `FILTER_LLM_*`, `NOTIF_BLOCKLIST`, `ASSISTANT_NAME` as needed |
-
-To run HexMentraBridge with the same gateway and MentraOS app, clone it and use the launcher script: see [Running HexMentraBridge](#running-hexmentrabridge) below.
+**[HexMentraBridge](https://github.com/johannboehme/HexMentraBridge)** is an alternative that uses OpenClaw’s Gateway WebSocket and a separate push port; this repo uses the HTTP Responses API and a single port. To run HexMentraBridge with the same gateway, see [Running HexMentraBridge](#running-hexmentrabridge) below.
 
 ## Testing Mentra first (no OpenClaw)
 
@@ -59,8 +51,11 @@ cp .env.example .env
 | `OPENCLAW_GATEWAY_URL` | OpenClaw gateway base URL (e.g. `http://127.0.0.1:18789`) |
 | `OPENCLAW_GATEWAY_TOKEN` | Bearer token for the gateway |
 | `OPENCLAW_AGENT_ID` | Optional; agent id (default `main`) |
-| `OPENCLAW_TRIGGER_WORDS` | Optional; comma-separated trigger phrases to send the transcript to OpenClaw (e.g. `go,send,execute,big mac`). Dictation is only sent when you say one of these. |
+| `OPENCLAW_TRIGGER_WORDS` | Optional; comma-separated trigger phrases to send the transcript to OpenClaw (e.g. `go,send,execute,big mac`). |
 | `OPENCLAW_CLEAR_WORDS` | Optional; comma-separated phrases to clear or cancel (e.g. `clear,stop,reset,cancel`). |
+| `PUSH_TOKEN` | Optional; if set, Push API endpoints require `Authorization: Bearer <token>` or `?token=<token>`. |
+| `FILTER_LLM_URL`, `FILTER_LLM_API_KEY`, `FILTER_LLM_MODEL` | Optional; for copilot pre-filter (e.g. OpenAI-compatible chat endpoint and `haiku`). |
+| `NOTIF_BLOCKLIST` | Optional; comma-separated app names to suppress (for future notification handling). |
 
 ### 3. MentraOS (glasses) side
 
@@ -108,17 +103,20 @@ The bridge listens on `PORT` and exposes:
 
 - **Webhook** (for MentraOS Cloud): path used when registering the app (e.g. `/webhook`).
 - **Health**: `GET /health` returns 200 for MentraOS heartbeat checks.
+- **Push API** (same port): `POST /push` (body: `{ "text": "...", "duration": 10000 }`), `POST /push-bitmap` (stub), `POST /mic` (toggle listening), `POST /copilot`, `GET /copilot`, `GET /status`, `GET /debug`. If `PUSH_TOKEN` is set, use `Authorization: Bearer <token>` or `?token=<token>`.
 
 ## Flow
 
 1. User puts on Even G1 glasses and opens your app (MentraOS connects to the bridge via the cloud).
-2. User **speaks**; final transcriptions are sent to OpenClaw as user messages.
-3. OpenClaw’s **streaming** response is shown on the glasses (throttled to ~4 updates per second to respect display limits).
+2. User **looks up** to start recording; **looks down** to send the prompt (or says a trigger word like “send”). In **copilot mode**, transcripts are batched and optionally filtered before being sent.
+3. OpenClaw’s **streaming** response is shown on the glasses (throttled to ~4 updates per second).
 4. If the user speaks again while a response is in progress, the glasses show “Busy. Wait for the current response.”
+
+Transcripts are logged to `transcripts/YYYY-MM-DD.md`. Use the Push API to show reminders or status on the glasses from scripts or other services.
 
 ## Repository structure
 
-- **`src/`** — Bridge app: [index.ts](src/index.ts) (server, webhook, Mentra SDK), [openclaw.ts](src/openclaw.ts) (OpenClaw HTTP client).
+- **`src/`** — Bridge app: [index.ts](src/index.ts) (server, webhook, sessions), [openclaw.ts](src/openclaw.ts) (OpenClaw HTTP client), [session-registry.ts](src/session-registry.ts), [push-routes.ts](src/push-routes.ts), [transcript-log.ts](src/transcript-log.ts), [copilot-filter.ts](src/copilot-filter.ts).
 - **`scripts/`** — Check, tests, deploy (Railway), Cloudflare tunnel setup, HexMentraBridge launcher.
 - **`docs/`** — OpenClaw and gateway debugging/setup guides; see [docs/README.md](docs/README.md) for an index.
 - **Config:** `package.json`, `tsconfig.json`, [.env.example](.env.example), `railway.json`, `nixpacks.toml`.
