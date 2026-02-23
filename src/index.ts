@@ -16,6 +16,19 @@ const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 /** Delay between rendering each word (ms). */
 const WORD_RENDER_DELAY_MS = 120;
 
+/** Format response text for readability - put list items on their own lines */
+const formatResponseText = (text: string): string => {
+  return text
+    // Strip markdown formatting
+    .replace(/\*/g, "")
+    .replace(/#+\s*/g, "")
+    .replace(/"/g, "")
+    // Add newline before numbered list items (1. 2. 3. etc)
+    .replace(/\s+(\d+\.)\s+/g, "\n$1 ")
+    // Add newline before bullet points (- or •)
+    .replace(/\s+([-•])\s+/g, "\n$1 ");
+};
+
 /** G1 display max lines */
 const G1_MAX_LINES = 5;
 
@@ -324,7 +337,9 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               state = SessionState.STREAMING;
             }
-            responseBuffer += delta.replace(/\*/g, "").replace(/#+/g, "").replace(/"/g, "");
+            responseBuffer += delta;
+            // Format the entire buffer for proper list display
+            responseBuffer = formatResponseText(responseBuffer);
             startWordRenderer();
           },
           onDone: () => {
