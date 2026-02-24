@@ -231,6 +231,8 @@ class OpenClawBridgeServer extends AppServer {
 
     // Response buffer for streaming
     let responseBuffer = "";
+    // Track if next content needs a leading space (set when we receive whitespace-only deltas)
+    let pendingSpace = false;
 
     // Word-by-word rendering state
     let renderedWordCount = 0;
@@ -502,6 +504,7 @@ class OpenClawBridgeServer extends AppServer {
           if (!noReply) lastAnswer = responseBuffer;
           setState(SessionState.IDLE);
           responseBuffer = "";
+          pendingSpace = false;
           renderedWordCount = 0;
           streamComplete = false;
           if (noReply) {
@@ -660,6 +663,7 @@ class OpenClawBridgeServer extends AppServer {
       // Reset response rendering state
       stopWordRenderer();
       responseBuffer = "";
+      pendingSpace = false;
       renderedWordCount = 0;
       streamComplete = false;
       responseView.clear();
@@ -679,10 +683,17 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               setState(SessionState.STREAMING);
             }
-            // Normalize: no trailing space on buffer so we never double up with stream spaces.
+            // Detect word boundary BEFORE any trimming: space at end of buffer OR start of delta OR pending from previous whitespace-only delta
+            const bufferHadTrailingSpace = /\s$/.test(responseBuffer);
+            const deltaHasLeadingSpace = /^\s/.test(delta);
+            const needsSpace = pendingSpace || bufferHadTrailingSpace || deltaHasLeadingSpace;
+
+            // Normalize: remove trailing space from buffer
             responseBuffer = responseBuffer.replace(/\s+$/, "");
-            // Contraction: don't add space before "'t", "'s", etc.; buffer already trimmed above.
+
+            // Contraction: don't add space before "'t", "'s", etc.
             if (delta.startsWith("'")) {
+              pendingSpace = false;
               responseBuffer += delta;
               responseBuffer = formatResponseText(responseBuffer);
               if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
@@ -696,6 +707,8 @@ class OpenClawBridgeServer extends AppServer {
             }
             const deltaTrimmed = delta.replace(/^\s+/, "");
             if (deltaTrimmed.length === 0) {
+              // Whitespace-only delta: remember to add space before next content
+              pendingSpace = true;
               responseBuffer = formatResponseText(responseBuffer);
               if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
                 session.logger.info(
@@ -706,10 +719,13 @@ class OpenClawBridgeServer extends AppServer {
               startWordRenderer();
               return;
             }
-            // Exactly one space between words: add only if we have content and the stream didn't already give us a boundary (we trimmed leading from delta).
-            if (responseBuffer.length > 0) {
+            // Only add space if the original stream had whitespace at the boundary
+            // This preserves word integrity: "opencl" + "aw" -> "openclaw" (no space)
+            // But "open" + " claw" -> "open claw" (space from delta)
+            if (responseBuffer.length > 0 && needsSpace) {
               responseBuffer += " ";
             }
+            pendingSpace = false;
             responseBuffer += deltaTrimmed;
             // Format the entire buffer for proper list display
             responseBuffer = formatResponseText(responseBuffer);
@@ -754,6 +770,7 @@ class OpenClawBridgeServer extends AppServer {
             setTimeout(() => {
               setState(SessionState.IDLE);
               responseBuffer = "";
+              pendingSpace = false;
               renderedWordCount = 0;
               streamComplete = false;
               showWelcome();
@@ -910,6 +927,7 @@ class OpenClawBridgeServer extends AppServer {
         stopResponseClearTimer();
         stopWordRenderer();
         responseBuffer = "";
+        pendingSpace = false;
         renderedWordCount = 0;
         streamComplete = false;
         responseView.clear();
