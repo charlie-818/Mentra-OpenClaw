@@ -1,3 +1,13 @@
+<!-- 
+  Mentra OpenClaw Bridge
+  
+  A bridge service that connects Even G1 smart glasses (MentraOS) with OpenClaw AI gateway.
+  Enables voice-controlled AI interaction through the glasses with features like copilot mode,
+  head gesture controls, and real-time streaming responses. The bridge handles webhook events
+  from MentraOS, processes voice transcripts, sends them to OpenClaw, and streams AI responses
+  back to the glasses display.
+-->
+
 # Mentra OpenClaw Bridge
 
 Connects **Even G1 glasses** (running MentraOS) to your **OpenClaw** gateway: speak into the glasses to send prompts to OpenClaw, and stream OpenClaw’s responses back as text on the glasses.
