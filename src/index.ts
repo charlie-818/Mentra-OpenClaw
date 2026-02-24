@@ -13,6 +13,7 @@ import * as registry from "./session-registry.js";
 import * as pushRoutes from "./push-routes.js";
 import { appendTranscript } from "./transcript-log.js";
 import { isFilterConfigured, classifyTranscript } from "./copilot-filter.js";
+import { parseAgentCommand, deployAgent, getAgentStatus } from "./agent-deploy.js";
 
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-bridge";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -641,6 +642,61 @@ class OpenClawBridgeServer extends AppServer {
       displayTranscriptView();
     };
 
+    /** Deploy an agent (Cursor or Claude) */
+    const handleAgentDeploy = async (prompt: string, agentType: "cursor" | "claude") => {
+      setState(SessionState.SENDING);
+      transcriptSegments = [];
+      currentInterim = "";
+      lastInterimTriggerText = "";
+      transcriptView.clear();
+
+      const agentName = agentType === "cursor" ? "Cursor" : "Claude";
+      session.layouts.showTextWall(`Deploying ${agentName} agent...`, { durationMs: -1 });
+      session.logger.info(`[AgentDeploy] Deploying ${agentType} agent: "${prompt.slice(0, 50)}..."`);
+
+      try {
+        // Check if configured
+        const status = getAgentStatus();
+        if (agentType === "cursor" && !status.cursor.configured) {
+          session.layouts.showTextWall("Cursor not configured. Set CURSOR_API_KEY.", { durationMs: 5000 });
+          setTimeout(() => { setState(SessionState.IDLE); showWelcome(); }, 5000);
+          return;
+        }
+        if (agentType === "claude" && !status.claude.configured) {
+          session.layouts.showTextWall("Claude not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
+          setTimeout(() => { setState(SessionState.IDLE); showWelcome(); }, 5000);
+          return;
+        }
+
+        // Get default repository from env for Cursor
+        const repository = process.env.CURSOR_DEFAULT_REPO || process.env.GITHUB_REPOSITORY;
+
+        const result = await deployAgent({
+          type: agentType,
+          prompt,
+          repository: agentType === "cursor" ? repository : undefined,
+          autoCreatePr: true,
+          allowedTools: ["Read", "Edit", "Bash", "Glob", "Grep", "Write"],
+        });
+
+        if (result.success) {
+          const statusText = result.status === "RUNNING" ? "running" : "deployed";
+          const idShort = result.agentId?.slice(-8) || "";
+          session.layouts.showTextWall(`${agentName} agent ${statusText}${idShort ? `: ${idShort}` : ""}`, { durationMs: 5000 });
+          session.logger.info(`[AgentDeploy] Success: ${result.agentId} status=${result.status}`);
+        } else {
+          session.layouts.showTextWall(`Deploy failed: ${result.error?.slice(0, 50)}`, { durationMs: 5000 });
+          session.logger.error(`[AgentDeploy] Failed: ${result.error}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        session.layouts.showTextWall(`Error: ${message.slice(0, 50)}`, { durationMs: 5000 });
+        session.logger.error(`[AgentDeploy] Error: ${message}`);
+      }
+
+      setTimeout(() => { setState(SessionState.IDLE); showWelcome(); }, 5000);
+    };
+
     /** Send prompt to OpenClaw */
     const sendToOpenClaw = (prompt: string) => {
       if (state === SessionState.SENDING || state === SessionState.STREAMING) {
@@ -651,6 +707,14 @@ class OpenClawBridgeServer extends AppServer {
       if (!prompt) {
         session.logger.warn("Empty prompt, ignoring");
         showTranscript();
+        return;
+      }
+
+      // Check for agent deployment commands
+      const agentCmd = parseAgentCommand(prompt);
+      if (agentCmd.isAgentCommand && agentCmd.request) {
+        session.logger.info(`[AgentCommand] Detected ${agentCmd.request.type} agent command`);
+        handleAgentDeploy(agentCmd.request.prompt, agentCmd.request.type);
         return;
       }
 
@@ -1008,6 +1072,11 @@ app.post("/copilot", pushRoutes.handleCopilotPost);
 app.get("/copilot", pushRoutes.handleCopilotGet);
 app.get("/status", pushRoutes.handleStatus);
 app.get("/debug", pushRoutes.handleDebug);
+// Agent deployment routes
+app.get("/agents/status", pushRoutes.handleAgentsStatus);
+app.post("/agents/deploy", pushRoutes.handleAgentDeploy);
+app.get("/agents/cursor", pushRoutes.handleCursorAgentsList);
+app.get("/agents/cursor/:id", pushRoutes.handleCursorAgentStatus);
 
 server.start().then(() => {
   fetchSpyPrice();

@@ -6,6 +6,14 @@
 import type { Request, Response } from "express";
 import * as registry from "./session-registry.js";
 import { getOpenClawConfigFromEnv } from "./openclaw.js";
+import {
+  deployAgent,
+  getAgentStatus,
+  getCursorConfigFromEnv,
+  getCursorAgentStatus,
+  listCursorAgents,
+  type AgentDeployRequest,
+} from "./agent-deploy.js";
 
 const PUSH_TOKEN = process.env.PUSH_TOKEN;
 
@@ -152,4 +160,156 @@ export function handleDebug(req: Request, res: Response): void {
     totalSessions: registry.getAll().length,
     sessions,
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Agent Deployment Endpoints
+// ════════════════════════════════════════════════════════════════════════════
+
+/** GET /agents/status — check which agent services are configured */
+export function handleAgentsStatus(req: Request, res: Response): void {
+  if (!checkAuth(req)) {
+    jsonErr(res, 401, "Unauthorized");
+    return;
+  }
+  const status = getAgentStatus();
+  jsonOk(res, { ok: true, agents: status });
+}
+
+/** POST /agents/deploy — deploy a Cursor or Claude agent */
+export async function handleAgentDeploy(req: Request, res: Response): Promise<void> {
+  if (!checkAuth(req)) {
+    jsonErr(res, 401, "Unauthorized");
+    return;
+  }
+
+  const body = req.body as Partial<AgentDeployRequest>;
+
+  // Validate required fields
+  if (!body.type || !["cursor", "claude"].includes(body.type)) {
+    jsonErr(res, 400, "type must be 'cursor' or 'claude'");
+    return;
+  }
+  if (!body.prompt || typeof body.prompt !== "string") {
+    jsonErr(res, 400, "prompt is required");
+    return;
+  }
+
+  // For Cursor agents, repository is required
+  if (body.type === "cursor" && !body.repository) {
+    jsonErr(res, 400, "repository URL required for Cursor agents");
+    return;
+  }
+
+  const request: AgentDeployRequest = {
+    type: body.type,
+    prompt: body.prompt,
+    repository: body.repository,
+    branch: body.branch,
+    autoCreatePr: body.autoCreatePr ?? true,
+    workingDirectory: body.workingDirectory,
+    allowedTools: body.allowedTools,
+  };
+
+  // Show status on glasses if session available
+  const entry = registry.getFirst();
+  if (entry) {
+    const agentType = body.type === "cursor" ? "Cursor" : "Claude";
+    entry.session.layouts.showTextWall(`Deploying ${agentType} agent...`, { durationMs: 5000 });
+  }
+
+  try {
+    const result = await deployAgent(request);
+
+    if (result.success && entry) {
+      const statusMsg = result.status === "RUNNING" ? "Agent running" : "Agent deployed";
+      entry.session.layouts.showTextWall(`${statusMsg}: ${result.agentId?.slice(-8) || "OK"}`, {
+        durationMs: 5000,
+      });
+    } else if (!result.success && entry) {
+      entry.session.layouts.showTextWall(`Deploy failed: ${result.error?.slice(0, 40)}`, {
+        durationMs: 5000,
+      });
+    }
+
+    if (result.success) {
+      jsonOk(res, {
+        ok: true,
+        agentId: result.agentId,
+        status: result.status,
+        details: result.details,
+      });
+    } else {
+      jsonErr(res, 500, result.error || "Deployment failed");
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[AgentDeploy] Error: ${message}`);
+    jsonErr(res, 500, message);
+  }
+}
+
+/** GET /agents/cursor — list Cursor agents */
+export async function handleCursorAgentsList(req: Request, res: Response): Promise<void> {
+  if (!checkAuth(req)) {
+    jsonErr(res, 401, "Unauthorized");
+    return;
+  }
+
+  const config = getCursorConfigFromEnv();
+  if (!config) {
+    jsonErr(res, 503, "CURSOR_API_KEY not configured");
+    return;
+  }
+
+  const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit, 10) : 10;
+
+  try {
+    const result = await listCursorAgents(config, limit);
+    if (result.success) {
+      jsonOk(res, { ok: true, agents: result.agents });
+    } else {
+      jsonErr(res, 500, result.error || "Failed to list agents");
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    jsonErr(res, 500, message);
+  }
+}
+
+/** GET /agents/cursor/:id — get Cursor agent status */
+export async function handleCursorAgentStatus(req: Request, res: Response): Promise<void> {
+  if (!checkAuth(req)) {
+    jsonErr(res, 401, "Unauthorized");
+    return;
+  }
+
+  const config = getCursorConfigFromEnv();
+  if (!config) {
+    jsonErr(res, 503, "CURSOR_API_KEY not configured");
+    return;
+  }
+
+  const agentId = typeof req.params.id === "string" ? req.params.id : req.params.id?.[0];
+  if (!agentId) {
+    jsonErr(res, 400, "Agent ID required");
+    return;
+  }
+
+  try {
+    const result = await getCursorAgentStatus(config, agentId);
+    if (result.success) {
+      jsonOk(res, {
+        ok: true,
+        agentId: result.agentId,
+        status: result.status,
+        details: result.details,
+      });
+    } else {
+      jsonErr(res, 500, result.error || "Failed to get agent status");
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    jsonErr(res, 500, message);
+  }
 }
