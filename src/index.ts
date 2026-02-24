@@ -679,22 +679,38 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               setState(SessionState.STREAMING);
             }
-            // Contraction: trim trailing space so "don " + "'t" -> "don't" (stream may send space before apostrophe).
+            // Normalize: no trailing space on buffer so we never double up with stream spaces.
+            responseBuffer = responseBuffer.replace(/\s+$/, "");
+            // Contraction: don't add space before "'t", "'s", etc.; buffer already trimmed above.
             if (delta.startsWith("'")) {
-              responseBuffer = responseBuffer.replace(/\s+$/, "");
+              responseBuffer += delta;
+              responseBuffer = formatResponseText(responseBuffer);
+              if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+                session.logger.info(
+                  { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
+                  "onDelta"
+                );
+              }
+              startWordRenderer();
+              return;
             }
-            // Always insert space between two non-whitespace chunks so words never fuse (e.g. "copy" + "paste" -> "copy paste").
-            // Only skip before contraction apostrophe (handled above). Prefer adequate spacing; some tokens may split (e.g. "Cl aw").
-            const needSpaceBetweenChunks =
-              responseBuffer.length > 0 &&
-              !/\s$/.test(responseBuffer) &&
-              delta.length > 0 &&
-              !/^\s/.test(delta) &&
-              !delta.startsWith("'");
-            if (needSpaceBetweenChunks) {
+            const deltaTrimmed = delta.replace(/^\s+/, "");
+            if (deltaTrimmed.length === 0) {
+              responseBuffer = formatResponseText(responseBuffer);
+              if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+                session.logger.info(
+                  { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
+                  "onDelta"
+                );
+              }
+              startWordRenderer();
+              return;
+            }
+            // Exactly one space between words: add only if we have content and the stream didn't already give us a boundary (we trimmed leading from delta).
+            if (responseBuffer.length > 0) {
               responseBuffer += " ";
             }
-            responseBuffer += delta;
+            responseBuffer += deltaTrimmed;
             // Format the entire buffer for proper list display
             responseBuffer = formatResponseText(responseBuffer);
             if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
