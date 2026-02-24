@@ -249,16 +249,15 @@ class OpenClawBridgeServer extends AppServer {
       const battery = glassesBatteryLevel !== null ? `${glassesBatteryLevel}%` : "--";
       const tempStr = weatherTempC != null ? `${weatherTempC}°C` : "-- °C";
       const line1 = `${timeStr}  ${battery}  ${tempStr}`;
-      const spyPart =
+      const spyLine =
         spyPriceUsd != null
           ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
           : "SPY --";
-      const feesPart =
+      const feesLine =
         totalFees24h != null
-          ? `  Fees24h $${totalFees24h.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-          : "";
-      const spyLine = spyPart + feesPart;
-      return `${line1}\n${spyLine}`;
+          ? `Fees24h $${totalFees24h.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+          : "Fees24h --";
+      return `${line1}\n${spyLine}\n${feesLine}`;
     };
 
     const DIVIDER = "---------------------";
@@ -636,16 +635,14 @@ class OpenClawBridgeServer extends AppServer {
             if (state !== SessionState.STREAMING) {
               setState(SessionState.STREAMING);
             }
-            // Insert space only at clear word boundaries to avoid splitting contractions (don't -> don 't) or mid-word (elevate -> el evate)
-            const bufferEndsWordBoundary = /\n$|[.!?,;:]$/.test(responseBuffer);
-            const deltaStartsNewWord = delta.length > 0 && /[A-Z]/.test(delta.charAt(0));
+            // Insert space whenever we're joining two non-whitespace chunks so words don't fuse (e.g. "copy" + "paste" + "ready" -> "copy paste ready").
+            // Skip space only for contraction apostrophe so "don" + "'t" doesn't become "don 't".
             const needSpaceBetweenChunks =
               responseBuffer.length > 0 &&
               !/\s$/.test(responseBuffer) &&
               delta.length > 0 &&
               !/^\s/.test(delta) &&
-              !delta.startsWith("'") && // contraction: don't, can't, 't, 's, etc.
-              (bufferEndsWordBoundary || deltaStartsNewWord);
+              !delta.startsWith("'");
             if (needSpaceBetweenChunks) {
               responseBuffer += " ";
             }
