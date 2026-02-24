@@ -28,6 +28,7 @@ function formatResponseText(text, insertSpaceAtAsterisks = true) {
     .replace(/(\S)"(\S)/g, "$1 $2")
     .replace(/"/g, "")
     .replace(/  +/g, " ")
+    .replace(/(\w+)\s+('(?:t|s|re|ve|ll|d|m)\b)/gi, "$1$2")
     .replace(/(\w+) (ly|ed|ing|ness|er|est|ful|less|ment|able|ible|tion|sion|'s)\b/gi, (_, word, suffix) =>
       SUFFIX_MERGE_BLOCKLIST.has(word.toLowerCase()) ? `${word} ${suffix}` : word + suffix
     )
