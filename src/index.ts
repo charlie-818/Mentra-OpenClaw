@@ -683,18 +683,14 @@ class OpenClawBridgeServer extends AppServer {
             if (delta.startsWith("'")) {
               responseBuffer = responseBuffer.replace(/\s+$/, "");
             }
-            // Insert space when joining two separate words so they don't fuse (e.g. "copy" + "paste" -> "copy paste").
-            // Do NOT insert space when we're mid-word (buffer ends with letter and delta starts with letter, e.g. "Cl" + "aw" -> "Claw").
-            // Do NOT insert space before contraction apostrophe (handled above).
-            const bufferEndsWithWordChar = /\w$/.test(responseBuffer);
-            const deltaStartsWithWordChar = delta.length > 0 && /^\w/.test(delta);
+            // Always insert space between two non-whitespace chunks so words never fuse (e.g. "copy" + "paste" -> "copy paste").
+            // Only skip before contraction apostrophe (handled above). Prefer adequate spacing; some tokens may split (e.g. "Cl aw").
             const needSpaceBetweenChunks =
               responseBuffer.length > 0 &&
               !/\s$/.test(responseBuffer) &&
               delta.length > 0 &&
               !/^\s/.test(delta) &&
-              !delta.startsWith("'") &&
-              !(bufferEndsWithWordChar && deltaStartsWithWordChar);
+              !delta.startsWith("'");
             if (needSpaceBetweenChunks) {
               responseBuffer += " ";
             }

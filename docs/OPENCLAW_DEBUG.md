@@ -55,6 +55,15 @@ Then open the app on the glasses and speak. Look for:
 
 **Trigger words:** Dictated text is sent to OpenClaw only when you say a **trigger phrase** (e.g. "go", "send", "execute", "big mac"). All dictated text is logged on the glasses; saying a trigger sends the current transcript (minus the trigger) to OpenClaw and clears the log. Set `OPENCLAW_TRIGGER_WORDS` in `.env` to a comma-separated list to change triggers (default: `go,send,execute,big mac`). If you speak but never say a trigger, you will see "Final transcription received" in logs but no "Sending to OpenClaw" until you say a trigger.
 
+### Debugging spacing or fused/split words on the glasses
+
+If text on the glasses shows words run together (e.g. "copypaste") or oddly split (e.g. "Cl aw"), inspect what the bridge is receiving and building:
+
+- **Railway:** Set env `DEBUG=1` or `LOG_SSE=1` in the Railway project, redeploy, then run `railway logs` (or use the Railway dashboard Logs / Log Explorer). Each streamed chunk is logged with `onDelta` and the current buffer tail.
+- **Local:** Run the bridge with `DEBUG=1` or `LOG_SSE=1` and watch the terminal; you’ll see `deltaLen`, `bufferLen`, and `tail` for each chunk so you can see how spacing is applied between deltas.
+
+The bridge always inserts a space between two non-whitespace chunks so words do not fuse; it trims a trailing space only when the next chunk is a contraction apostrophe (e.g. `'t`, `'s`) so "don't" stays correct.
+
 ## 4. OpenClaw on a different host (SSH machine)
 
 If OpenClaw runs on another machine (e.g. `100.84.26.71`):
