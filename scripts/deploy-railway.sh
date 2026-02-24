@@ -69,7 +69,18 @@ if [[ -n "${OPENCLAW_AGENT_ID:-}" ]]; then
 fi
 echo "✓ Environment variables set"
 
-# ── 6. Deploy ─────────────────────────────────────────────────────────────────
+# ── 6. Run tests in Railway (optional) ────────────────────────────────────────
+if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
+  echo "→ Running test suite in Railway environment (railway run npm run test:ci)..."
+  if ! railway run npm run test:ci; then
+    echo "Tests failed; aborting deploy."
+    exit 1
+  fi
+else
+  echo "SKIP_TESTS=1 set, skipping test run before deploy."
+fi
+
+# ── 7. Deploy ─────────────────────────────────────────────────────────────────
 echo "→ Deploying to Railway..."
 railway up --detach
 

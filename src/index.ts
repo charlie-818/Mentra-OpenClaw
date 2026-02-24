@@ -14,51 +14,47 @@ import * as pushRoutes from "./push-routes.js";
 import { appendTranscript } from "./transcript-log.js";
 import { isFilterConfigured, classifyTranscript } from "./copilot-filter.js";
 import { parseAgentCommand, deployAgent, getAgentStatus } from "./agent-deploy.js";
+import {
+  startPreview,
+  appendPreviewDelta,
+  completePreview,
+  failPreview,
+  getPreviewState,
+} from "./preview-state.js";
+import { formatResponseText, formatForDisplay } from "./display-format.js";
 
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-bridge";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
-const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
+const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY ?? "";
 
 /** Delay between rendering each word (ms). */
 const WORD_RENDER_DELAY_MS = 120;
 
-/** Words that must not be merged with a following suffix (e.g. "the ly" stays two tokens; "it" allowed so "it 's" -> "it's") */
-const SUFFIX_MERGE_BLOCKLIST = new Set(
-  "a,the,he,she,we,me,be,to,of,in,on,at,is,or,so,no,go,do,up,us,as,an,am".split(",")
-);
+/** Default system prompt for OpenClaw responses, tuned for G1 glasses readability. */
+const DEFAULT_OPENCLAW_SYSTEM_PROMPT =
+  [
+    "You are an assistant for AR smart glasses.",
+    "Answer in clear, simple plain language.",
+    "Optimize for a very small, narrow display that is read at a glance.",
+    "Use short sentences and keep each idea on its own line.",
+    "Do not use markdown or formatting syntax of any kind.",
+    "Do not use bullets, numbered lists, headings, code blocks, or emojis.",
+    "Avoid decorative characters like asterisks, dashes used as bullets, or box drawing.",
+    "Keep answers concise and focused on what the user asked.",
+  ].join(" ");
 
-/** Format response text for readability - put list items on their own lines */
-const formatResponseText = (text: string): string => {
-  return text
-    // Insert space where asterisks sit between non-whitespace (avoid fusing words)
-    .replace(/(\S)\*+(\S)/g, "$1 $2")
-    // Strip markdown formatting (insert space at boundaries so words don't fuse)
-    .replace(/\*+/g, "")
-    .replace(/(\S)#+\s*(\S)/g, "$1 $2")
-    .replace(/#+\s*/g, "")
-    .replace(/(\S)"(\S)/g, "$1 $2")
-    .replace(/"/g, "")
-    // Normalize whitespace (collapse multiple spaces)
-    .replace(/  +/g, " ")
-    // Merge word + space + contraction apostrophe so "don 't" -> "don't", "it 's" -> "it's"
-    .replace(/(\w+)\s+('(?:t|s|re|ve|ll|d|m)\b)/gi, "$1$2")
-    // Merge word + space + suffix into one word (calm ly -> calmly); skip blocklisted words
-    .replace(/(\w+) (ly|ed|ing|ness|er|est|ful|less|ment|able|ible|tion|sion|'s)\b/gi, (_, word, suffix) =>
-      SUFFIX_MERGE_BLOCKLIST.has(word.toLowerCase()) ? `${word} ${suffix}` : word + suffix
-    )
-    // Add newline before numbered list items (1. 2. 3. etc) - handles mid-sentence numbers
-    .replace(/([.!?])\s+(\d+\.)\s/g, "$1\n$2 ")
-    .replace(/([a-z])\s+(\d+\.)\s/g, "$1\n$2 ")
-    // Add newline before bullet dashes that follow text
-    .replace(/([.!?a-z])\s+-\s+/gi, "$1\n- ")
-    // Clean up any double newlines
-    .replace(/\n\n+/g, "\n")
-    .trim();
+const getOpenClawSystemPrompt = (): string => {
+  const fromEnv = process.env.OPENCLAW_SYSTEM_PROMPT;
+  const trimmed = fromEnv?.trim();
+  if (trimmed && trimmed.length > 0) {
+    return trimmed;
+  }
+  return DEFAULT_OPENCLAW_SYSTEM_PROMPT;
 };
 
-/** Join viewport lines for display, reinserting space at wrapped word boundaries so words don't run together on the glasses. */
+/** Join viewport lines for display without introducing extra spaces inside words. */
 const joinViewportLinesWithSpaces = (lines: string[]): string =>
-  lines.join("\n").replace(/([^\s])\n(?=[^\s])/g, "$1 \n");
+  lines.join("\n");
 
 /** G1 display max lines */
 const G1_MAX_LINES = 5;
@@ -159,7 +155,7 @@ async function fetchWestwoodWeather(): Promise<void> {
   }
 }
 
-if (!MENTRAOS_API_KEY) {
+if (!MENTRAOS_API_KEY && process.env.NODE_ENV !== "test") {
   console.error("MENTRAOS_API_KEY environment variable is required");
   process.exit(1);
 }
@@ -852,7 +848,10 @@ class OpenClawBridgeServer extends AppServer {
             }, 5000);
           },
         },
-        { user: userId }
+        {
+          user: userId,
+          systemPrompt: getOpenClawSystemPrompt(),
+        }
       );
     };
 
@@ -1095,15 +1094,77 @@ app.get("/agents/status", pushRoutes.handleAgentsStatus);
 app.post("/agents/deploy", pushRoutes.handleAgentDeploy);
 app.get("/agents/cursor", pushRoutes.handleCursorAgentsList);
 app.get("/agents/cursor/:id", pushRoutes.handleCursorAgentStatus);
+app.post("/preview/prompt", (req, res) => {
+  const promptRaw = req.body?.prompt;
+  if (typeof promptRaw !== "string" || !promptRaw.trim()) {
+    res.status(400).json({ error: "prompt is required" });
+    return;
+  }
+  const prompt = promptRaw.trim();
 
-server.start().then(() => {
-  fetchSpyPrice();
-  fetchStakingFees();
-  fetchWestwoodWeather();
-  setInterval(fetchSpyPrice, 60_000);
-  setInterval(fetchStakingFees, 60_000);
-  setInterval(fetchWestwoodWeather, 60_000);
-}).catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
+  const config = getOpenClawConfigFromEnv();
+  if (!config && process.env.OPENCLAW_TEST_MODE !== "1") {
+    res.status(503).json({ error: "OpenClaw not configured" });
+    return;
+  }
+
+  startPreview(prompt);
+
+  const effectiveConfig =
+    config ??
+    ({
+      baseUrl: "http://localhost",
+      token: "test-token",
+      agentId: "preview-test",
+    } as const);
+
+  void streamOpenClawResponse(
+    effectiveConfig,
+    prompt,
+    {
+      onDelta: (delta) => appendPreviewDelta(delta),
+      onDone: () => {
+        /* no-op */
+      },
+      onCompleted: () => {
+        completePreview();
+      },
+      onFailed: (err) => {
+        failPreview(err);
+      },
+    },
+    { user: "preview" }
+  );
+
+  res.status(202).json({ status: "started" });
 });
+
+app.get("/preview/state", (_req, res) => {
+  const state = getPreviewState();
+  res.json({
+    ...state,
+    content: formatForDisplay(state.content),
+  });
+});
+
+app.get("/preview", (_req, res) => {
+  const url = new URL("../public/preview.html", import.meta.url);
+  res.sendFile(url.pathname);
+});
+export { app, server };
+
+if (process.env.NODE_ENV !== "test") {
+  server.start()
+    .then(() => {
+      fetchSpyPrice();
+      fetchStakingFees();
+      fetchWestwoodWeather();
+      setInterval(fetchSpyPrice, 60_000);
+      setInterval(fetchStakingFees, 60_000);
+      setInterval(fetchWestwoodWeather, 60_000);
+    })
+    .catch((err) => {
+      console.error("Failed to start server:", err);
+      process.exit(1);
+    });
+}

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Mentra OpenClaw Preview</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #0f172a;
+        color: #e5e7eb;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+      }
+      p {
+        margin-top: 0;
+        margin-bottom: 1rem;
+        color: #9ca3af;
+      }
+      .card {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 24px;
+        border-radius: 16px;
+        background: #020617;
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.7);
+        border: 1px solid #1e293b;
+      }
+      label {
+        display: block;
+        font-size: 0.9rem;
+        margin-bottom: 0.25rem;
+      }
+      textarea {
+        width: 100%;
+        min-height: 80px;
+        border-radius: 8px;
+        padding: 10px 12px;
+        border: 1px solid #1f2937;
+        background: #020617;
+        color: #e5e7eb;
+        resize: vertical;
+        font-size: 0.95rem;
+      }
+      textarea:focus {
+        outline: 2px solid #38bdf8;
+        outline-offset: 1px;
+        border-color: #38bdf8;
+      }
+      button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+        padding: 0.6rem 1.1rem;
+        border-radius: 999px;
+        border: none;
+        background: linear-gradient(135deg, #38bdf8, #6366f1);
+        color: #0b1120;
+        font-weight: 600;
+        font-size: 0.95rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .status {
+        font-size: 0.8rem;
+        margin-top: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #9ca3af;
+      }
+      .status span {
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        background: #111827;
+        border: 1px solid #1f2937;
+      }
+      .frame {
+        margin-top: 1.25rem;
+        border-radius: 14px;
+        border: 1px solid #1f2937;
+        background: radial-gradient(circle at top left, #0f172a, #020617);
+        padding: 16px 18px;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        font-size: 0.9rem;
+        line-height: 1.4;
+        min-height: 90px;
+        white-space: pre-wrap;
+      }
+      .frame-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        margin-bottom: 0.3rem;
+        color: #6b7280;
+      }
+      .frame-inner {
+        border-radius: 10px;
+        border: 1px solid #4b5563;
+        padding: 8px 10px;
+        background: #020617;
+        color: #e5e7eb;
+      }
+      .error {
+        margin-top: 0.75rem;
+        font-size: 0.85rem;
+        color: #fecaca;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Glasses Output Preview</h1>
+      <p>
+        Type a prompt to see what would be rendered on the Even G1 display.
+        This uses the same OpenClaw pipeline the glasses do, with an optional
+        test mode for development.
+      </p>
+
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" placeholder="Ask anything you'd say to the glasses"></textarea>
+      <button id="sendBtn" type="button">
+        <span>Send to Preview</span>
+      </button>
+
+      <div class="status">
+        Status:
+        <span id="statusText">idle</span>
+      </div>
+
+      <div class="frame">
+        <div class="frame-title">Simulated Glasses Frame</div>
+        <div id="content" class="frame-inner">
+          Waiting for a prompt...
+        </div>
+      </div>
+
+      <div id="error" class="error" hidden></div>
+    </main>
+
+    <script>
+      const promptEl = document.getElementById("prompt");
+      const sendBtn = document.getElementById("sendBtn");
+      const statusText = document.getElementById("statusText");
+      const contentEl = document.getElementById("content");
+      const errorEl = document.getElementById("error");
+
+      let pollTimer = null;
+
+      function setStatus(status) {
+        statusText.textContent = status;
+      }
+
+      function setError(message) {
+        if (!message) {
+          errorEl.hidden = true;
+          errorEl.textContent = "";
+        } else {
+          errorEl.hidden = false;
+          errorEl.textContent = message;
+        }
+      }
+
+      async function pollStateOnce() {
+        try {
+          const res = await fetch("/preview/state");
+          if (!res.ok) {
+            throw new Error("Failed to fetch preview state");
+          }
+          const data = await res.json();
+          setStatus(data.status || "unknown");
+          if (data.error) {
+            setError(data.error);
+          } else {
+            setError("");
+          }
+          if (data.content) {
+            contentEl.textContent = data.content;
+          } else {
+            contentEl.textContent = "Waiting for response...";
+          }
+          return data;
+        } catch (err) {
+          setError(err && err.message ? err.message : String(err));
+          return null;
+        }
+      }
+
+      function startPolling() {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+        }
+        pollTimer = setInterval(async () => {
+          const data = await pollStateOnce();
+          if (!data) return;
+          if (data.status === "completed" || data.status === "error") {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        }, 800);
+      }
+
+      async function sendPrompt() {
+        const prompt = promptEl.value.trim();
+        if (!prompt) {
+          setError("Please enter a prompt first.");
+          return;
+        }
+        setError("");
+        sendBtn.disabled = true;
+        setStatus("pending");
+        contentEl.textContent = "Sending prompt to preview...";
+
+        try {
+          const res = await fetch("/preview/prompt", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ prompt }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to start preview");
+          }
+          setStatus("pending");
+          startPolling();
+        } catch (err) {
+          setError(err && err.message ? err.message : String(err));
+          setStatus("error");
+        } finally {
+          sendBtn.disabled = false;
+        }
+      }
+
+      sendBtn.addEventListener("click", () => {
+        sendPrompt();
+      });
+
+      promptEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          sendPrompt();
+        }
+      });
+
+      pollStateOnce();
+    </script>
+  </body>
+</html>
+

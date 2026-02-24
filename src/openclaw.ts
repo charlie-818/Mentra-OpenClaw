@@ -89,8 +89,21 @@ export async function streamOpenClawResponse(
   config: OpenClawConfig,
   userMessage: string,
   callbacks: StreamCallbacks,
-  options?: { user?: string }
+  options?: { user?: string; systemPrompt?: string }
 ): Promise<void> {
+  if (process.env.OPENCLAW_TEST_MODE === "1") {
+    const chunks = [
+      "1. *This* is a **test** response for previewing output on the glasses.",
+      "2. Use this mode to verify your pipelines without calling a real OpenClaw gateway.",
+    ];
+    for (const chunk of chunks) {
+      callbacks.onDelta?.(chunk);
+    }
+    callbacks.onDone?.();
+    callbacks.onCompleted?.();
+    return;
+  }
+
   const url = `${config.baseUrl.replace(/\/$/, "")}/v1/responses`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${config.token}`,
@@ -100,16 +113,25 @@ export async function streamOpenClawResponse(
     headers["x-openclaw-agent-id"] = config.agentId;
   }
 
+  const input: OpenResponsesInput = [];
+  const systemPrompt = options?.systemPrompt?.trim();
+  if (systemPrompt && systemPrompt.length > 0) {
+    input.push({
+      type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: systemPrompt }],
+    });
+  }
+  input.push({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: userMessage }],
+  });
+
   const body = {
     model: "openclaw",
     stream: true,
-    input: [
-      {
-        type: "message" as const,
-        role: "user" as const,
-        content: [{ type: "input_text" as const, text: userMessage }],
-      },
-    ],
+    input,
     ...(options?.user && { user: options.user }),
   };
 

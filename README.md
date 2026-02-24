@@ -104,6 +104,64 @@ The bridge listens on `PORT` and exposes:
 - **Webhook** (for MentraOS Cloud): path used when registering the app (e.g. `/webhook`).
 - **Health**: `GET /health` returns 200 for MentraOS heartbeat checks.
 - **Push API** (same port): `POST /push` (body: `{ "text": "...", "duration": 10000 }`), `POST /push-bitmap` (stub), `POST /mic` (toggle listening), `POST /copilot`, `GET /copilot`, `GET /status`, `GET /debug`. If `PUSH_TOKEN` is set, use `Authorization: Bearer <token>` or `?token=<token>`.
+- **Preview API & page**:
+  - `POST /preview/prompt` — starts a preview run for a given `prompt` using the same OpenClaw pipeline as the glasses.
+  - `GET /preview/state` — returns the latest preview state (status, content, error).
+  - `GET /preview` — simple test webpage that lets you send prompts and see what would be rendered on the glasses.
+
+## Testing
+
+- **Unit + integration tests** (Vitest):
+  ```bash
+  npm test
+  ```
+- **Unit tests only**:
+  ```bash
+  npm run test:unit
+  ```
+- **HTTP + preview integration tests**:
+  ```bash
+  npm run test:integration
+  ```
+- **CI mode with coverage**:
+  ```bash
+  npm run test:ci
+  ```
+- **Preview browser tests (Playwright)**:
+  ```bash
+  npm run test:preview
+  ```
+
+OpenClaw-dependent paths use a synthetic **test mode** when `OPENCLAW_TEST_MODE=1`, so the tests and preview endpoints can run without a live gateway.
+
+Existing scripts are still available:
+
+- `npm run check` — project health check (lint/format/etc).
+- `npm run test:openclaw` — smoke test against a real OpenClaw gateway (requires `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_TOKEN`).
+- `npm run test:full` — runs checks and the OpenClaw smoke test (skipping gateway tests if not configured).
+
+### Preview webpage
+
+To quickly see what would be shown on the Even G1 display for a given prompt:
+
+1. Start the dev server:
+   ```bash
+   npm run dev
+   ```
+2. Visit `http://localhost:3000/preview` in your browser.
+3. Enter a prompt and click **Send to Preview** (or press <kbd>Cmd/Ctrl + Enter</kbd>).
+
+In development you can optionally set:
+
+- `OPENCLAW_TEST_MODE=1` to use a synthetic response (no real OpenClaw gateway required).
+
+The preview (and glasses) output is formatted by a shared formatter in [`src/display-format.ts`](src/display-format.ts) which:
+
+- Strips markdown markers and emojis.
+- Preserves word boundaries (no fused or split words).
+- Emits a short uppercase heading per paragraph and numbered list lines below it.
+
+The Playwright tests for `/preview` in [`tests/playwright/preview.spec.ts`](tests/playwright/preview.spec.ts) define the expected structure; any changes made there are enforced against the same formatter used for the glasses output.
 
 ## Flow
 
@@ -125,6 +183,37 @@ Transcripts are logged to `transcripts/YYYY-MM-DD.md`. Use the Push API to show 
 
 - **Deploying the bridge:** The repo includes [railway.json](railway.json) and [nixpacks.toml](nixpacks.toml) for [Railway](https://railway.app). Production environment variables are set in Railway (dashboard or `railway variables set`), not from repo `.env`. For a one-shot deploy from this repo, see [scripts/deploy-railway.sh](scripts/deploy-railway.sh) (requires Railway CLI and the required env vars).
 - **Exposing OpenClaw:** If the bridge runs remotely (e.g. on Railway) and OpenClaw is on your machine, expose it with a tunnel. [scripts/setup-cloudflare-tunnel.sh](scripts/setup-cloudflare-tunnel.sh) sets up a Cloudflare Tunnel and prints the URL to use as `OPENCLAW_GATEWAY_URL`.
+
+### Railway + tests
+
+With the [Railway CLI](https://railway.app/docs/cli) installed and the project linked:
+
+- Run the full test suite inside Railway (using the app's production-like environment):
+  ```bash
+  railway run npm run test:ci
+  ```
+- Trigger a deploy with tests enforced:
+  ```bash
+  # Required env vars (see scripts/deploy-railway.sh header)
+  OPENCLAW_GATEWAY_URL=... \
+  OPENCLAW_GATEWAY_TOKEN=... \
+  MENTRAOS_API_KEY=... \
+  PACKAGE_NAME=... \
+  bash scripts/deploy-railway.sh
+  ```
+
+The deploy script will:
+
+- Ensure the Railway CLI is installed and authenticated.
+- Link/init the project and push environment variables.
+- Run `railway run npm run test:ci` and **abort the deploy if tests fail**.
+- Call `railway up --detach` to trigger the deployment.
+
+To skip the test run for a one-off deploy (not recommended), set:
+
+```bash
+SKIP_TESTS=1 bash scripts/deploy-railway.sh
+```
 
 ## Running HexMentraBridge
 
