@@ -250,6 +250,9 @@ class OpenClawBridgeServer extends AppServer {
     /** Keep finished response on display this long (ms) before clearing */
     const RESPONSE_CLEAR_AFTER_MS = 5000;
     let responseClearTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Head up must be sustained this long (ms) before starting transcription */
+    const HEAD_UP_SUSTAIN_MS = 2000;
+    let headUpStartTranscriptionTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Status bar state
     let glassesBatteryLevel: number | null = null;
@@ -297,6 +300,14 @@ class OpenClawBridgeServer extends AppServer {
       if (responseClearTimer) {
         clearTimeout(responseClearTimer);
         responseClearTimer = null;
+      }
+    };
+
+    /** Cancel pending head-up-to-start-transcription (sustained 2s) */
+    const stopHeadUpStartTranscriptionTimer = () => {
+      if (headUpStartTranscriptionTimer) {
+        clearTimeout(headUpStartTranscriptionTimer);
+        headUpStartTranscriptionTimer = null;
       }
     };
 
@@ -973,16 +984,22 @@ class OpenClawBridgeServer extends AppServer {
     });
 
     const unsubHeadPosition = session.events.onHeadPosition((data) => {
-      // Head up: start listening for transcription
+      // Head up: start listening for transcription after sustained 2s
       if (data.position === "up") {
-        if (state === SessionState.IDLE) {
-          stopWelcomeClearTimer();
-          stopGreetingRenderer();
-          setState(SessionState.LISTENING);
-          session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
+        if (state === SessionState.IDLE && !headUpStartTranscriptionTimer) {
+          headUpStartTranscriptionTimer = setTimeout(() => {
+            headUpStartTranscriptionTimer = null;
+            stopWelcomeClearTimer();
+            stopGreetingRenderer();
+            setState(SessionState.LISTENING);
+            session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
+          }, HEAD_UP_SUSTAIN_MS);
         }
         return;
       }
+
+      // Head no longer up: cancel pending start-transcription
+      stopHeadUpStartTranscriptionTimer();
 
       // Head down: various actions
       if (data.position !== "down") return;
@@ -1051,6 +1068,7 @@ class OpenClawBridgeServer extends AppServer {
       stopGreetingRenderer();
       stopWelcomeClearTimer();
       stopResponseClearTimer();
+      stopHeadUpStartTranscriptionTimer();
       stopPushScroll();
     });
   }
