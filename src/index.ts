@@ -239,6 +239,9 @@ class OpenClawBridgeServer extends AppServer {
     let greetingRenderTimer: ReturnType<typeof setTimeout> | null = null;
     let greetingRenderedText = "";
     let greetingIndex = 0;
+    /** Clear welcome dashboard if user doesn't look up within this time (ms) */
+    const WELCOME_CLEAR_AFTER_MS = 5000;
+    let welcomeClearTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Status bar state
     let glassesBatteryLevel: number | null = null;
@@ -273,6 +276,14 @@ class OpenClawBridgeServer extends AppServer {
       }
     };
 
+    /** Stop the timer that clears the welcome dashboard when user doesn't look up */
+    const stopWelcomeClearTimer = () => {
+      if (welcomeClearTimer) {
+        clearTimeout(welcomeClearTimer);
+        welcomeClearTimer = null;
+      }
+    };
+
     /** Render next letter of greeting */
     const renderNextGreetingLetter = () => {
       if (greetingIndex >= WELCOME_MESSAGE.length) {
@@ -288,12 +299,20 @@ class OpenClawBridgeServer extends AppServer {
       greetingRenderTimer = setTimeout(renderNextGreetingLetter, GREETING_LETTER_DELAY_MS);
     };
 
-    /** Display welcome message letter by letter */
+    /** Display welcome message letter by letter; clear dashboard after 5s if user doesn't look up */
     const showWelcome = () => {
       stopGreetingRenderer();
+      stopWelcomeClearTimer();
       greetingRenderedText = "";
       greetingIndex = 0;
       renderNextGreetingLetter();
+      welcomeClearTimer = setTimeout(() => {
+        welcomeClearTimer = null;
+        if (state === SessionState.IDLE) {
+          stopGreetingRenderer();
+          session.layouts.showTextWall(" ", { durationMs: -1 });
+        }
+      }, WELCOME_CLEAR_AFTER_MS);
     };
 
     const entry: registry.SessionEntry = {
@@ -306,6 +325,7 @@ class OpenClawBridgeServer extends AppServer {
       copilotPipeline: { totalFiltered: 0, totalPassed: 0, bufferSize: 0, inflight: false },
       requestListening(listening: boolean) {
         if (listening && state === SessionState.IDLE) {
+          stopWelcomeClearTimer();
           setState(SessionState.LISTENING);
           stopGreetingRenderer();
           session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
@@ -831,6 +851,7 @@ class OpenClawBridgeServer extends AppServer {
       // Head up: start listening for transcription
       if (data.position === "up") {
         if (state === SessionState.IDLE) {
+          stopWelcomeClearTimer();
           stopGreetingRenderer();
           setState(SessionState.LISTENING);
           session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
@@ -900,6 +921,7 @@ class OpenClawBridgeServer extends AppServer {
       unsubGlassesBattery();
       stopWordRenderer();
       stopGreetingRenderer();
+      stopWelcomeClearTimer();
       stopPushScroll();
     });
   }
