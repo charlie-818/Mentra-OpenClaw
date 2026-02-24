@@ -307,36 +307,44 @@ export async function deployAgent(request: AgentDeployRequest): Promise<AgentDep
 /**
  * Parse voice command to determine agent deployment
  * Examples:
- * - "cursor agent fix the login bug in my-repo"
- * - "claude agent refactor the authentication module"
+ * - "cursor agent fix the login bug"
+ * - "cursor fix the login bug"
  * - "deploy cursor to add dark mode"
+ * - "claude agent refactor the auth module"
+ * - "claude fix tests"
  * - "run claude code to fix tests"
  */
 export function parseAgentCommand(
   transcript: string
 ): { isAgentCommand: boolean; request?: AgentDeployRequest } {
-  const lower = transcript.toLowerCase();
+  const lower = transcript.toLowerCase().trim();
 
-  // Cursor agent patterns
+  // Cursor agent patterns - more flexible matching
   const cursorPatterns = [
-    /(?:cursor\s+agent|deploy\s+cursor|cursor\s+cloud)\s+(.+)/i,
-    /(?:background\s+agent|cloud\s+agent)\s+(.+)/i,
+    /^(?:hey\s+)?(?:cursor\s+agent|deploy\s+cursor|cursor\s+cloud|background\s+agent|cloud\s+agent)\s+(?:to\s+)?(.+)/i,
+    /^(?:hey\s+)?cursor\s+(?:please\s+)?(?:can\s+you\s+)?(.+)/i,
+    /^(?:use|run|send|start)\s+cursor\s+(?:to\s+)?(.+)/i,
+    /^(?:have\s+)?cursor\s+(?:go\s+)?(?:and\s+)?(.+)/i,
   ];
 
-  // Claude agent patterns
+  // Claude agent patterns - more flexible matching
   const claudePatterns = [
-    /(?:claude\s+(?:code\s+)?agent|deploy\s+claude|run\s+claude(?:\s+code)?)\s+(.+)/i,
-    /(?:claude\s+code)\s+(.+)/i,
+    /^(?:hey\s+)?(?:claude\s+(?:code\s+)?agent|deploy\s+claude|run\s+claude(?:\s+code)?)\s+(?:to\s+)?(.+)/i,
+    /^(?:hey\s+)?claude\s+(?:code\s+)?(?:please\s+)?(?:can\s+you\s+)?(.+)/i,
+    /^(?:use|run|send|start)\s+claude(?:\s+code)?\s+(?:to\s+)?(.+)/i,
+    /^(?:have\s+)?claude(?:\s+code)?\s+(?:go\s+)?(?:and\s+)?(.+)/i,
   ];
 
   for (const pattern of cursorPatterns) {
     const match = lower.match(pattern);
-    if (match) {
+    if (match && match[1].length > 3) {
+      // Clean up the prompt - remove leading "to", "and", "please"
+      let prompt = match[1].trim().replace(/^(?:to|and|please)\s+/i, "");
       return {
         isAgentCommand: true,
         request: {
           type: "cursor",
-          prompt: match[1].trim(),
+          prompt,
           autoCreatePr: true,
         },
       };
@@ -345,12 +353,14 @@ export function parseAgentCommand(
 
   for (const pattern of claudePatterns) {
     const match = lower.match(pattern);
-    if (match) {
+    if (match && match[1].length > 3) {
+      // Clean up the prompt
+      let prompt = match[1].trim().replace(/^(?:to|and|please)\s+/i, "");
       return {
         isAgentCommand: true,
         request: {
           type: "claude",
-          prompt: match[1].trim(),
+          prompt,
           allowedTools: ["Read", "Edit", "Bash", "Glob", "Grep", "Write"],
         },
       };
