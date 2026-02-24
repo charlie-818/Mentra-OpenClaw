@@ -255,7 +255,7 @@ class OpenClawBridgeServer extends AppServer {
           : "SPY --";
       const feesPart =
         totalFees24h != null
-          ? `  Fees24h $${totalFees24h.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+          ? `  Fees $${totalFees24h.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
           : "";
       const spyLine = spyPart + feesPart;
       return `${line1}\n${spyLine}`;
