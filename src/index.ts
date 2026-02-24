@@ -244,6 +244,9 @@ class OpenClawBridgeServer extends AppServer {
     /** Clear welcome dashboard if user doesn't look up within this time (ms) */
     const WELCOME_CLEAR_AFTER_MS = 5000;
     let welcomeClearTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Keep finished response on display this long (ms) before clearing */
+    const RESPONSE_CLEAR_AFTER_MS = 5000;
+    let responseClearTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Status bar state
     let glassesBatteryLevel: number | null = null;
@@ -283,6 +286,14 @@ class OpenClawBridgeServer extends AppServer {
       if (welcomeClearTimer) {
         clearTimeout(welcomeClearTimer);
         welcomeClearTimer = null;
+      }
+    };
+
+    /** Stop the timer that clears the display after a finished response */
+    const stopResponseClearTimer = () => {
+      if (responseClearTimer) {
+        clearTimeout(responseClearTimer);
+        responseClearTimer = null;
       }
     };
 
@@ -493,7 +504,18 @@ class OpenClawBridgeServer extends AppServer {
           responseBuffer = "";
           renderedWordCount = 0;
           streamComplete = false;
-          if (noReply) showWelcome();
+          if (noReply) {
+            showWelcome();
+          } else {
+            // Keep response on display for 5s, then clear
+            stopResponseClearTimer();
+            responseClearTimer = setTimeout(() => {
+              responseClearTimer = null;
+              if (state === SessionState.IDLE) {
+                session.layouts.showTextWall(" ", { durationMs: -1 });
+              }
+            }, RESPONSE_CLEAR_AFTER_MS);
+          }
         }
         return;
       }
@@ -873,6 +895,7 @@ class OpenClawBridgeServer extends AppServer {
       if (data.position !== "down") return;
 
       if (state === SessionState.STREAMING) {
+        stopResponseClearTimer();
         stopWordRenderer();
         responseBuffer = "";
         renderedWordCount = 0;
@@ -885,6 +908,7 @@ class OpenClawBridgeServer extends AppServer {
       }
 
       if (state === SessionState.IDLE && lastAnswer) {
+        stopResponseClearTimer();
         lastAnswer = "";
         responseView.clear();
         showWelcome();
@@ -932,6 +956,7 @@ class OpenClawBridgeServer extends AppServer {
       stopWordRenderer();
       stopGreetingRenderer();
       stopWelcomeClearTimer();
+      stopResponseClearTimer();
       stopPushScroll();
     });
   }
