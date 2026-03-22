@@ -97,7 +97,7 @@ const COPILOT_TOGGLE_PHRASES = [
 
 /** AI mode voice toggle phrases. */
 const AI_MODE_PHRASES = {
-  claude: ["claude"],
+  claude: ["code"],
   openclaw: ["open"],
   toggle: ["switch mode", "toggle mode"],
 };
