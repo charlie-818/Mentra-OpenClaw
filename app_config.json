@@ -1,0 +1,249 @@
+{
+  "description": "OpenClaw Bridge - Voice-to-AI assistant for smart glasses. Speak commands, get instant AI responses displayed on your glasses.",
+  "permissions": [
+    {
+      "type": "TRANSCRIPTION",
+      "reason": "Required to capture voice commands and convert speech to text for AI processing",
+      "required": true
+    },
+    {
+      "type": "DISPLAY",
+      "reason": "Required to show AI responses and status information on smart glasses",
+      "required": true
+    }
+  ],
+  "settings": [
+    {
+      "type": "group",
+      "key": "general_settings",
+      "label": "General"
+    },
+    {
+      "type": "toggle",
+      "key": "show_live_transcription",
+      "label": "Show Live Transcription",
+      "description": "Display real-time transcription on glasses while speaking",
+      "defaultValue": true
+    },
+    {
+      "type": "select",
+      "key": "response_speed",
+      "label": "Response Animation Speed",
+      "description": "How fast words appear when displaying AI responses",
+      "defaultValue": "normal",
+      "options": [
+        { "label": "Fast", "value": "fast" },
+        { "label": "Normal", "value": "normal" },
+        { "label": "Slow", "value": "slow" }
+      ]
+    },
+    {
+      "type": "select",
+      "key": "timezone",
+      "label": "Timezone",
+      "description": "Timezone for the status bar clock",
+      "defaultValue": "America/Los_Angeles",
+      "options": [
+        { "label": "Pacific Time", "value": "America/Los_Angeles" },
+        { "label": "Mountain Time", "value": "America/Denver" },
+        { "label": "Central Time", "value": "America/Chicago" },
+        { "label": "Eastern Time", "value": "America/New_York" },
+        { "label": "UTC", "value": "UTC" },
+        { "label": "London", "value": "Europe/London" },
+        { "label": "Berlin", "value": "Europe/Berlin" },
+        { "label": "Tokyo", "value": "Asia/Tokyo" }
+      ]
+    },
+    {
+      "type": "group",
+      "key": "voice_settings",
+      "label": "Voice Commands"
+    },
+    {
+      "type": "text",
+      "key": "trigger_words",
+      "label": "Trigger Words",
+      "description": "Comma-separated words that send your message to AI (e.g., mac,jarvis,send)",
+      "defaultValue": "mac,jarvis,send,execute"
+    },
+    {
+      "type": "text",
+      "key": "clear_words",
+      "label": "Clear Words",
+      "description": "Comma-separated words that clear the current transcript (e.g., clear,stop)",
+      "defaultValue": "clear,stop,reset,cancel"
+    },
+    {
+      "type": "toggle",
+      "key": "copilot_mode_default",
+      "label": "Start in Copilot Mode",
+      "description": "Enable copilot mode by default when app starts. Copilot mode batches ambient speech and uses AI filtering.",
+      "defaultValue": false
+    },
+    {
+      "type": "number",
+      "key": "copilot_debounce_seconds",
+      "label": "Copilot Batch Delay",
+      "description": "Seconds to wait before processing batched speech in copilot mode",
+      "defaultValue": 3,
+      "min": 1,
+      "max": 10,
+      "step": 1
+    },
+    {
+      "type": "group",
+      "key": "display_settings",
+      "label": "Status Dashboard"
+    },
+    {
+      "type": "toggle",
+      "key": "show_dashboard",
+      "label": "Show Status Dashboard",
+      "description": "Display time, battery, weather, and market info when idle",
+      "defaultValue": true
+    },
+    {
+      "type": "toggle",
+      "key": "show_battery",
+      "label": "Show Battery Level",
+      "description": "Include glasses battery percentage in the status bar",
+      "defaultValue": true
+    },
+    {
+      "type": "toggle",
+      "key": "show_weather",
+      "label": "Show Weather",
+      "description": "Include current temperature in the status bar",
+      "defaultValue": true
+    },
+    {
+      "type": "toggle",
+      "key": "show_stock_price",
+      "label": "Show SPY Price",
+      "description": "Include S&P 500 ETF price in the status bar",
+      "defaultValue": true
+    },
+    {
+      "type": "number",
+      "key": "dashboard_timeout_seconds",
+      "label": "Dashboard Timeout",
+      "description": "Seconds before the dashboard auto-hides (0 = never hide)",
+      "defaultValue": 5,
+      "min": 0,
+      "max": 60,
+      "step": 5
+    },
+    {
+      "type": "number",
+      "key": "response_timeout_seconds",
+      "label": "Response Display Timeout",
+      "description": "Seconds to keep AI response on screen before clearing",
+      "defaultValue": 5,
+      "min": 0,
+      "max": 60,
+      "step": 5
+    },
+    {
+      "type": "group",
+      "key": "ai_settings",
+      "label": "AI Configuration"
+    },
+    {
+      "type": "select",
+      "key": "default_ai_mode",
+      "label": "Default AI Backend",
+      "description": "Which AI backend to use by default",
+      "defaultValue": "openclaw",
+      "options": [
+        { "label": "OpenClaw", "value": "openclaw" },
+        { "label": "Claude Code", "value": "claude" }
+      ]
+    },
+    {
+      "type": "select",
+      "key": "ai_response_style",
+      "label": "AI Response Style",
+      "description": "How detailed should AI responses be",
+      "defaultValue": "concise",
+      "options": [
+        { "label": "Concise", "value": "concise" },
+        { "label": "Balanced", "value": "balanced" },
+        { "label": "Detailed", "value": "detailed" }
+      ]
+    },
+    {
+      "type": "text",
+      "key": "custom_system_prompt",
+      "label": "Custom System Prompt",
+      "description": "Override the default AI behavior instructions (leave empty to use default)",
+      "defaultValue": ""
+    },
+    {
+      "type": "number",
+      "key": "head_up_delay_seconds",
+      "label": "Head Up Activation Delay",
+      "description": "Seconds to hold head up before starting transcription",
+      "defaultValue": 2,
+      "min": 0.5,
+      "max": 5,
+      "step": 0.5
+    },
+    {
+      "type": "group",
+      "key": "agent_settings",
+      "label": "AI Agents"
+    },
+    {
+      "type": "toggle",
+      "key": "enable_agent_commands",
+      "label": "Enable Agent Commands",
+      "description": "Allow voice commands to deploy Cursor or Claude agents",
+      "defaultValue": true
+    },
+    {
+      "type": "text",
+      "key": "default_repository",
+      "label": "Default Repository",
+      "description": "GitHub repository for agent deployments (owner/repo format)",
+      "defaultValue": ""
+    }
+  ],
+  "tools": [
+    {
+      "name": "ask_ai",
+      "description": "Send a voice command directly to the AI backend",
+      "triggers": ["ask ai", "hey ai", "question"],
+      "parameters": {}
+    },
+    {
+      "name": "toggle_copilot",
+      "description": "Toggle copilot mode on or off",
+      "triggers": ["copilot mode", "toggle copilot"],
+      "parameters": {}
+    },
+    {
+      "name": "switch_ai_mode",
+      "description": "Switch between OpenClaw and Claude Code backends",
+      "triggers": ["switch mode", "toggle mode", "claude mode", "openclaw mode"],
+      "parameters": {}
+    },
+    {
+      "name": "deploy_cursor_agent",
+      "description": "Deploy a Cursor AI agent to work on code",
+      "triggers": ["cursor agent", "deploy cursor"],
+      "parameters": {}
+    },
+    {
+      "name": "deploy_claude_agent",
+      "description": "Deploy a Claude AI agent to work on code",
+      "triggers": ["claude agent", "deploy claude"],
+      "parameters": {}
+    },
+    {
+      "name": "clear_display",
+      "description": "Clear the glasses display",
+      "triggers": ["clear display", "clear screen"],
+      "parameters": {}
+    }
+  ]
+}

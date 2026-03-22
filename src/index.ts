@@ -33,6 +33,7 @@ import {
   registerMirrorSession,
   clearMirrorSession,
 } from "./mirror-state.js";
+import { SessionSettings, DEFAULT_SETTINGS } from "./settings.js";
 
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-bridge";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -177,6 +178,24 @@ class OpenClawBridgeServer extends AppServer {
   ): Promise<void> {
     session.logger.info(`New session: ${sessionId} for user ${userId}`);
 
+    // Initialize settings from MentraOS
+    const settings = new SessionSettings(session);
+    session.logger.info({ settings: settings.getAll() }, "Session settings initialized");
+
+    // Settings-aware helper functions
+    const getTriggerWords = () => settings.triggerWords;
+    const getClearWords = () => settings.clearWords;
+    const getWordRenderDelayMs = () => settings.responseSpeedMs;
+    const getDashboardTimeoutMs = () => settings.dashboardTimeoutMs;
+    const getResponseTimeoutMs = () => settings.responseTimeoutMs;
+    const getCopilotDebounceMs = () => settings.copilotDebounceMs;
+    const getHeadUpDelayMs = () => settings.headUpDelayMs;
+    const getSystemPrompt = () => {
+      const fromEnv = process.env.OPENCLAW_SYSTEM_PROMPT?.trim();
+      if (fromEnv && fromEnv.length > 0) return fromEnv;
+      return settings.buildSystemPrompt();
+    };
+
     const openclawConfig = getOpenClawConfigFromEnv();
     const claudeCodeConfig = getClaudeCodeConfigFromEnv();
 
@@ -244,13 +263,9 @@ class OpenClawBridgeServer extends AppServer {
     let streamComplete = false;
 
     /** Clear dashboard if user doesn't look up within this time (ms) */
-    const DASHBOARD_CLEAR_AFTER_MS = 5000;
+    // Dashboard and response clear timers - use settings for durations
     let dashboardClearTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Keep finished response on display this long (ms) before clearing */
-    const RESPONSE_CLEAR_AFTER_MS = 5000;
     let responseClearTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Head up must be sustained this long (ms) before starting transcription */
-    const HEAD_UP_SUSTAIN_MS = 2000;
     let headUpStartTranscriptionTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Status bar state
@@ -297,14 +312,21 @@ class OpenClawBridgeServer extends AppServer {
 
     /** Display dashboard (status line only); clear after timeout if user doesn't look up */
     const showDashboard = () => {
+      if (!settings.showDashboard) {
+        showDisplay(" ", { durationMs: -1 });
+        return;
+      }
       stopDashboardClearTimer();
       showDisplay(getStatusLine(), { durationMs: -1 });
-      dashboardClearTimer = setTimeout(() => {
-        dashboardClearTimer = null;
-        if (state === SessionState.IDLE) {
-          showDisplay(" ", { durationMs: -1 });
-        }
-      }, DASHBOARD_CLEAR_AFTER_MS);
+      const timeout = getDashboardTimeoutMs();
+      if (timeout > 0) {
+        dashboardClearTimer = setTimeout(() => {
+          dashboardClearTimer = null;
+          if (state === SessionState.IDLE) {
+            showDisplay(" ", { durationMs: -1 });
+          }
+        }, timeout);
+      }
     };
 
     const entry: registry.SessionEntry = {
@@ -312,8 +334,8 @@ class OpenClawBridgeServer extends AppServer {
       sessionId,
       userId,
       state: SessionState.IDLE as registry.SessionStateLabel,
-      copilot: false,
-      aiMode: "openclaw",
+      copilot: settings.copilotModeDefault,
+      aiMode: settings.defaultAIMode,
       lastTranscriptAt: null,
       copilotPipeline: { totalFiltered: 0, totalPassed: 0, bufferSize: 0, inflight: false },
       requestListening(listening: boolean) {
@@ -359,7 +381,7 @@ class OpenClawBridgeServer extends AppServer {
           pushView.scrollToBottom();
           displayPushViewport();
           if (pushRenderedWordCount < pushTokens.length) {
-            pushWordRenderTimer = setTimeout(renderNextPushWord, WORD_RENDER_DELAY_MS);
+            pushWordRenderTimer = setTimeout(renderNextPushWord, getWordRenderDelayMs());
           }
         };
 
@@ -382,7 +404,7 @@ class OpenClawBridgeServer extends AppServer {
       if (s === SessionState.IDLE) setImmediate(tryProcessPendingCopilotBatch);
     };
 
-    const COPILOT_DEBOUNCE_MS = 3000;
+    // Copilot mode buffer - debounce time from settings
     let copilotBuffer: string[] = [];
     const recentCopilotBatches: string[] = [];
     const COPILOT_CONTEXT_BATCHES = 5;
@@ -495,7 +517,7 @@ class OpenClawBridgeServer extends AppServer {
               if (state === SessionState.IDLE) {
                 showDisplay(" ", { durationMs: -1 });
               }
-            }, RESPONSE_CLEAR_AFTER_MS);
+            }, getResponseTimeoutMs());
           }
         }
         return;
@@ -523,7 +545,7 @@ class OpenClawBridgeServer extends AppServer {
       displayResponseView();
 
       // Schedule next word
-      wordRenderTimer = setTimeout(renderNextWord, WORD_RENDER_DELAY_MS);
+      wordRenderTimer = setTimeout(renderNextWord, getWordRenderDelayMs());
     };
 
     /** Start word rendering if not already running */
@@ -537,7 +559,8 @@ class OpenClawBridgeServer extends AppServer {
     const getTriggerMatch = (text: string): string | null => {
       const s = text.trim().toLowerCase();
       if (!s) return null;
-      for (const trigger of TRIGGER_WORDS) {
+      const triggers = getTriggerWords();
+      for (const trigger of triggers) {
         if (s === trigger || s.endsWith(" " + trigger) || s.startsWith(trigger + " ")) {
           return trigger;
         }
@@ -562,7 +585,8 @@ class OpenClawBridgeServer extends AppServer {
     /** Check if text is a clear command */
     const isClearCommand = (text: string): boolean => {
       const s = text.trim().toLowerCase();
-      return CLEAR_WORDS.some((c) => s === c || s.endsWith(" " + c));
+      const clears = getClearWords();
+      return clears.some((c) => s === c || s.endsWith(" " + c));
     };
 
     /** Check for copilot voice command; returns "on" | "off" | "toggle" | null */
@@ -640,6 +664,10 @@ class OpenClawBridgeServer extends AppServer {
     /** Show transcript on display with ScrollView */
     const showTranscript = () => {
       if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
+
+      // Check if live transcription display is enabled
+      if (!settings.showLiveTranscription) return;
+
       const final = transcriptSegments.join(" ").trim();
       const display = currentInterim
         ? (final ? `${final} ${currentInterim}` : currentInterim)
@@ -860,7 +888,7 @@ class OpenClawBridgeServer extends AppServer {
           `Sending to Claude Code: prompt="${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}"`
         );
         streamClaudeCodeResponse(claudeCodeConfig, prompt, callbacks, {
-          systemPrompt: getOpenClawSystemPrompt(),
+          systemPrompt: getSystemPrompt(),
         });
       } else {
         if (!openclawConfig) {
@@ -874,7 +902,7 @@ class OpenClawBridgeServer extends AppServer {
         );
         streamOpenClawResponse(openclawConfig, prompt, callbacks, {
           user: userId,
-          systemPrompt: getOpenClawSystemPrompt(),
+          systemPrompt: getSystemPrompt(),
         });
       }
     };
@@ -989,7 +1017,7 @@ class OpenClawBridgeServer extends AppServer {
         copilotBuffer.push(text);
         entry.copilotPipeline.bufferSize = copilotBuffer.length;
         clearCopilotDebounce();
-        copilotDebounceTimer = setTimeout(flushCopilotBuffer, COPILOT_DEBOUNCE_MS);
+        copilotDebounceTimer = setTimeout(flushCopilotBuffer, getCopilotDebounceMs());
         transcriptSegments.push(text);
         showTranscript();
         return;
@@ -1026,7 +1054,7 @@ class OpenClawBridgeServer extends AppServer {
             stopDashboardClearTimer();
             setState(SessionState.LISTENING);
             showDisplay("Starting Transcription...", { durationMs: -1 });
-          }, HEAD_UP_SUSTAIN_MS);
+          }, getHeadUpDelayMs());
         }
         return;
       }
@@ -1090,6 +1118,16 @@ class OpenClawBridgeServer extends AppServer {
       glassesBatteryLevel = level;
     });
 
+    // Listen for settings changes from MentraOS
+    const unsubSettings = settings.onChange((key, value) => {
+      session.logger.info({ key, value }, "Setting changed");
+
+      // Handle specific setting changes that need runtime adjustments
+      if (key === "show_dashboard" && state === SessionState.IDLE) {
+        showDashboard();
+      }
+    });
+
     session.events.onDisconnected(() => {
       session.logger.info(`Session ${sessionId} disconnected.`);
       clearCopilotDebounce();
@@ -1098,6 +1136,7 @@ class OpenClawBridgeServer extends AppServer {
       unsubTranscription();
       unsubHeadPosition();
       unsubGlassesBattery();
+      unsubSettings();
       stopWordRenderer();
       stopDashboardClearTimer();
       stopResponseClearTimer();
