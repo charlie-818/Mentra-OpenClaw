@@ -96,9 +96,9 @@ const COPILOT_TOGGLE_PHRASES = [
 
 /** AI mode voice toggle phrases. */
 const AI_MODE_PHRASES = {
-  claude: ["claude mode", "claude on", "cloud mode", "cloud on"],
-  openclaw: ["openclaw mode", "openclaw on", "open claw mode", "open claw on"],
-  toggle: ["switch mode", "toggle mode", "swap mode"],
+  claude: ["claude"],
+  openclaw: ["open"],
+  toggle: ["switch mode", "toggle mode"],
 };
 
 let lastAnswer = "";
