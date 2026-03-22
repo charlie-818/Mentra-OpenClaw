@@ -197,17 +197,7 @@ class OpenClawBridgeServer extends AppServer {
     };
 
     const openclawConfig = getOpenClawConfigFromEnv();
-    const claudeCodeConfig = getClaudeCodeConfigFromEnv();
-
-    if (!openclawConfig && !claudeCodeConfig) {
-      session.layouts.showTextWall(
-        "Mentra connected. No AI backend configured."
-      );
-      session.events.onDisconnected(() => {
-        session.logger.info(`Session ${sessionId} disconnected.`);
-      });
-      return;
-    }
+    const claudeCodeConfig = getClaudeCodeConfigFromEnv(); // Always available (uses Max subscription if no API key)
 
     // Initialize G1 display toolkit for proper text wrapping
     const toolkit = createG1Toolkit();
@@ -879,11 +869,6 @@ class OpenClawBridgeServer extends AppServer {
 
       // Route to appropriate AI backend based on mode
       if (entry.aiMode === "claude") {
-        if (!claudeCodeConfig) {
-          showDisplay("Claude Code not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
-          setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
-          return;
-        }
         session.logger.info(
           `Sending to Claude Code: prompt="${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}"`
         );

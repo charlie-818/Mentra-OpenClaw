@@ -18,12 +18,11 @@ export interface ClaudeCodeCallbacks {
 
 /**
  * Load Claude Code config from environment.
+ * Returns config even without API key (CLI can use Max subscription auth).
  */
-export function getClaudeCodeConfigFromEnv(): ClaudeCodeConfig | null {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
+export function getClaudeCodeConfigFromEnv(): ClaudeCodeConfig {
   return {
-    apiKey,
+    apiKey: process.env.ANTHROPIC_API_KEY || "",
     model: process.env.CLAUDE_CODE_MODEL || "claude-sonnet-4-20250514",
     workingDirectory: process.env.CLAUDE_CODE_WORKING_DIR || process.cwd(),
   };
@@ -76,12 +75,15 @@ export async function streamClaudeCodeResponse(
     let output = "";
     let errorOutput = "";
 
+    // Only pass API key if set, otherwise CLI uses Max subscription auth
+    const env = { ...process.env };
+    if (config.apiKey) {
+      env.ANTHROPIC_API_KEY = config.apiKey;
+    }
+
     const child = spawn("claude", args, {
       cwd: workDir,
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: config.apiKey,
-      },
+      env,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
