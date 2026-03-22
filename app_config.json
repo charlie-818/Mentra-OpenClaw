@@ -16,7 +16,7 @@
     {
       "type": "group",
       "key": "general_settings",
-      "label": "General"
+      "title": "General"
     },
     {
       "type": "toggle",
@@ -57,7 +57,7 @@
     {
       "type": "group",
       "key": "voice_settings",
-      "label": "Voice Commands"
+      "title": "Voice Commands"
     },
     {
       "type": "text",
@@ -93,7 +93,7 @@
     {
       "type": "group",
       "key": "display_settings",
-      "label": "Status Dashboard"
+      "title": "Status Dashboard"
     },
     {
       "type": "toggle",
@@ -146,7 +146,7 @@
     {
       "type": "group",
       "key": "ai_settings",
-      "label": "AI Configuration"
+      "title": "AI Configuration"
     },
     {
       "type": "select",
@@ -191,7 +191,7 @@
     {
       "type": "group",
       "key": "agent_settings",
-      "label": "AI Agents"
+      "title": "AI Agents"
     },
     {
       "type": "toggle",
