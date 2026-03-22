@@ -9,6 +9,10 @@ import {
   getOpenClawConfigFromEnv,
   streamOpenClawResponse,
 } from "./openclaw.js";
+import {
+  getClaudeCodeConfigFromEnv,
+  streamClaudeCodeResponse,
+} from "./claude-code.js";
 import * as registry from "./session-registry.js";
 import * as pushRoutes from "./push-routes.js";
 import { appendTranscript } from "./transcript-log.js";
@@ -22,6 +26,13 @@ import {
   getPreviewState,
 } from "./preview-state.js";
 import { formatResponseText, formatForDisplay } from "./display-format.js";
+import {
+  getMirrorState,
+  updateMirrorDisplay,
+  updateMirrorSessionState,
+  registerMirrorSession,
+  clearMirrorSession,
+} from "./mirror-state.js";
 
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? "com.example.mentra-openclaw-bridge";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -82,6 +93,13 @@ const COPILOT_TOGGLE_PHRASES = [
   "new session",
   "neue session",
 ];
+
+/** AI mode voice toggle phrases. */
+const AI_MODE_PHRASES = {
+  claude: ["claude mode", "claude on", "cloud mode", "cloud on"],
+  openclaw: ["openclaw mode", "openclaw on", "open claw mode", "open claw on"],
+  toggle: ["switch mode", "toggle mode", "swap mode"],
+};
 
 let lastAnswer = "";
 
@@ -160,9 +178,11 @@ class OpenClawBridgeServer extends AppServer {
     session.logger.info(`New session: ${sessionId} for user ${userId}`);
 
     const openclawConfig = getOpenClawConfigFromEnv();
-    if (!openclawConfig) {
+    const claudeCodeConfig = getClaudeCodeConfigFromEnv();
+
+    if (!openclawConfig && !claudeCodeConfig) {
       session.layouts.showTextWall(
-        "Mentra connected. OpenClaw not configured."
+        "Mentra connected. No AI backend configured."
       );
       session.events.onDisconnected(() => {
         session.logger.info(`Session ${sessionId} disconnected.`);
@@ -269,7 +289,7 @@ class OpenClawBridgeServer extends AppServer {
     /** Display dashboard (status line only); clear after timeout if user doesn't look up */
     const showDashboard = () => {
       stopDashboardClearTimer();
-      session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}`, { durationMs: -1 });
+      session.layouts.showTextWall(getStatusLine(), { durationMs: -1 });
       dashboardClearTimer = setTimeout(() => {
         dashboardClearTimer = null;
         if (state === SessionState.IDLE) {
@@ -284,13 +304,14 @@ class OpenClawBridgeServer extends AppServer {
       userId,
       state: SessionState.IDLE as registry.SessionStateLabel,
       copilot: false,
+      aiMode: "openclaw",
       lastTranscriptAt: null,
       copilotPipeline: { totalFiltered: 0, totalPassed: 0, bufferSize: 0, inflight: false },
       requestListening(listening: boolean) {
         if (listening && state === SessionState.IDLE) {
           stopDashboardClearTimer();
           setState(SessionState.LISTENING);
-          session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
+          session.layouts.showTextWall("Starting Transcription...", { durationMs: -1 });
         } else if (!listening && (state === SessionState.LISTENING || state === SessionState.DICTATING)) {
           setState(SessionState.IDLE);
           showDashboard();
@@ -543,6 +564,21 @@ class OpenClawBridgeServer extends AppServer {
       return null;
     };
 
+    /** Check for AI mode voice command; returns "claude" | "openclaw" | "toggle" | null */
+    const getAIModeVoiceCommand = (text: string): "claude" | "openclaw" | "toggle" | null => {
+      const s = text.trim().toLowerCase();
+      for (const phrase of AI_MODE_PHRASES.claude) {
+        if (s.includes(phrase)) return "claude";
+      }
+      for (const phrase of AI_MODE_PHRASES.openclaw) {
+        if (s.includes(phrase)) return "openclaw";
+      }
+      for (const phrase of AI_MODE_PHRASES.toggle) {
+        if (s.includes(phrase)) return "toggle";
+      }
+      return null;
+    };
+
     /** Clear transcript and reset to idle */
     const clearTranscript = (fromInterim = false) => {
       transcriptSegments = [];
@@ -642,8 +678,110 @@ class OpenClawBridgeServer extends AppServer {
       setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
     };
 
-    /** Send prompt to OpenClaw */
-    const sendToOpenClaw = (prompt: string) => {
+    /** Common streaming callbacks for both OpenClaw and Claude Code */
+    const getStreamCallbacks = () => ({
+      onDelta: (delta: string) => {
+        if (state !== SessionState.STREAMING) {
+          setState(SessionState.STREAMING);
+        }
+        // Detect word boundary BEFORE any trimming: space at end of buffer OR start of delta OR pending from previous whitespace-only delta
+        const bufferHadTrailingSpace = /\s$/.test(responseBuffer);
+        const deltaHasLeadingSpace = /^\s/.test(delta);
+        const needsSpace = pendingSpace || bufferHadTrailingSpace || deltaHasLeadingSpace;
+
+        // Normalize: remove trailing space from buffer
+        responseBuffer = responseBuffer.replace(/\s+$/, "");
+
+        // Contraction: don't add space before "'t", "'s", etc.
+        if (delta.startsWith("'")) {
+          pendingSpace = false;
+          responseBuffer += delta;
+          responseBuffer = formatResponseText(responseBuffer);
+          if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+            session.logger.info(
+              { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
+              "onDelta"
+            );
+          }
+          startWordRenderer();
+          return;
+        }
+        const deltaTrimmed = delta.replace(/^\s+/, "");
+        if (deltaTrimmed.length === 0) {
+          // Whitespace-only delta: remember to add space before next content
+          pendingSpace = true;
+          responseBuffer = formatResponseText(responseBuffer);
+          if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+            session.logger.info(
+              { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
+              "onDelta"
+            );
+          }
+          startWordRenderer();
+          return;
+        }
+        // Only add space if the original stream had whitespace at the boundary
+        // This preserves word integrity: "opencl" + "aw" -> "openclaw" (no space)
+        // But "open" + " claw" -> "open claw" (space from delta)
+        if (responseBuffer.length > 0 && needsSpace) {
+          responseBuffer += " ";
+        }
+        pendingSpace = false;
+        responseBuffer += deltaTrimmed;
+        // Format the entire buffer for proper list display
+        responseBuffer = formatResponseText(responseBuffer);
+        if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+          session.logger.info(
+            { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
+            "onDelta"
+          );
+        }
+        startWordRenderer();
+      },
+      onDone: () => {
+        // Continue rendering remaining words
+      },
+      onCompleted: () => {
+        if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
+          session.logger.info(
+            { responseLen: responseBuffer.length, tail: responseBuffer.slice(-200) },
+            "stream completed"
+          );
+        }
+        streamComplete = true;
+        if (responseBuffer.length === 0) {
+          currentSendIsCopilot = false;
+          session.layouts.showTextWall("Done.", { durationMs: 2000 });
+          setTimeout(() => {
+            setState(SessionState.IDLE);
+            showDashboard();
+          }, 2000);
+        }
+        // Otherwise renderNextWord handles transition when done
+      },
+      onFailed: (err: unknown) => {
+        currentSendIsCopilot = false;
+        stopWordRenderer();
+        const message = err instanceof Error ? err.message : String(err);
+        const backend = entry.aiMode === "claude" ? "Claude Code" : "OpenClaw";
+        session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
+        session.logger.error(
+          { err: err instanceof Error ? err.stack : String(err) },
+          `${backend} request failed`
+        );
+        setTimeout(() => {
+          setState(SessionState.IDLE);
+          responseBuffer = "";
+          pendingSpace = false;
+          renderedWordCount = 0;
+          streamComplete = false;
+          showDashboard();
+        }, 5000);
+      },
+    });
+
+    /** Send prompt to AI backend (OpenClaw or Claude Code based on entry.aiMode) */
+    const sendToAI = (prompt: string) => {
       if (state === SessionState.SENDING || state === SessionState.STREAMING) {
         session.logger.warn("Ignoring send - already processing");
         return;
@@ -679,119 +817,40 @@ class OpenClawBridgeServer extends AppServer {
 
       session.layouts.showTextWall("Thinking...", { durationMs: -1 });
 
-      const openclawUrl = `${openclawConfig.baseUrl.replace(/\/$/, "")}/v1/responses`;
-      session.logger.info(
-        `Sending to OpenClaw: ${openclawUrl} prompt="${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}"`
-      );
+      const callbacks = getStreamCallbacks();
 
-      streamOpenClawResponse(
-        openclawConfig,
-        prompt,
-        {
-          onDelta: (delta) => {
-            if (state !== SessionState.STREAMING) {
-              setState(SessionState.STREAMING);
-            }
-            // Detect word boundary BEFORE any trimming: space at end of buffer OR start of delta OR pending from previous whitespace-only delta
-            const bufferHadTrailingSpace = /\s$/.test(responseBuffer);
-            const deltaHasLeadingSpace = /^\s/.test(delta);
-            const needsSpace = pendingSpace || bufferHadTrailingSpace || deltaHasLeadingSpace;
-
-            // Normalize: remove trailing space from buffer
-            responseBuffer = responseBuffer.replace(/\s+$/, "");
-
-            // Contraction: don't add space before "'t", "'s", etc.
-            if (delta.startsWith("'")) {
-              pendingSpace = false;
-              responseBuffer += delta;
-              responseBuffer = formatResponseText(responseBuffer);
-              if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
-                session.logger.info(
-                  { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
-                  "onDelta"
-                );
-              }
-              startWordRenderer();
-              return;
-            }
-            const deltaTrimmed = delta.replace(/^\s+/, "");
-            if (deltaTrimmed.length === 0) {
-              // Whitespace-only delta: remember to add space before next content
-              pendingSpace = true;
-              responseBuffer = formatResponseText(responseBuffer);
-              if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
-                session.logger.info(
-                  { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
-                  "onDelta"
-                );
-              }
-              startWordRenderer();
-              return;
-            }
-            // Only add space if the original stream had whitespace at the boundary
-            // This preserves word integrity: "opencl" + "aw" -> "openclaw" (no space)
-            // But "open" + " claw" -> "open claw" (space from delta)
-            if (responseBuffer.length > 0 && needsSpace) {
-              responseBuffer += " ";
-            }
-            pendingSpace = false;
-            responseBuffer += deltaTrimmed;
-            // Format the entire buffer for proper list display
-            responseBuffer = formatResponseText(responseBuffer);
-            if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
-              session.logger.info(
-                { deltaLen: delta.length, bufferLen: responseBuffer.length, tail: responseBuffer.slice(-100) },
-                "onDelta"
-              );
-            }
-            startWordRenderer();
-          },
-          onDone: () => {
-            // Continue rendering remaining words
-          },
-          onCompleted: () => {
-            if (process.env.DEBUG === "1" || process.env.LOG_SSE === "1") {
-              session.logger.info(
-                { responseLen: responseBuffer.length, tail: responseBuffer.slice(-200) },
-                "stream completed"
-              );
-            }
-            streamComplete = true;
-            if (responseBuffer.length === 0) {
-              currentSendIsCopilot = false;
-              session.layouts.showTextWall("Done.", { durationMs: 2000 });
-              setTimeout(() => {
-                setState(SessionState.IDLE);
-                showDashboard();
-              }, 2000);
-            }
-            // Otherwise renderNextWord handles transition when done
-          },
-          onFailed: (err) => {
-            currentSendIsCopilot = false;
-            stopWordRenderer();
-            const message = err instanceof Error ? err.message : String(err);
-            session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
-            session.logger.error(
-              { err: err instanceof Error ? err.stack : String(err) },
-              "OpenClaw request failed"
-            );
-            setTimeout(() => {
-              setState(SessionState.IDLE);
-              responseBuffer = "";
-              pendingSpace = false;
-              renderedWordCount = 0;
-              streamComplete = false;
-              showDashboard();
-            }, 5000);
-          },
-        },
-        {
+      // Route to appropriate AI backend based on mode
+      if (entry.aiMode === "claude") {
+        if (!claudeCodeConfig) {
+          session.layouts.showTextWall("Claude Code not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
+          setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
+          return;
+        }
+        session.logger.info(
+          `Sending to Claude Code: prompt="${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}"`
+        );
+        streamClaudeCodeResponse(claudeCodeConfig, prompt, callbacks, {
+          systemPrompt: getOpenClawSystemPrompt(),
+        });
+      } else {
+        if (!openclawConfig) {
+          session.layouts.showTextWall("OpenClaw not configured. Set OPENCLAW_GATEWAY_URL.", { durationMs: 5000 });
+          setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
+          return;
+        }
+        const openclawUrl = `${openclawConfig.baseUrl.replace(/\/$/, "")}/v1/responses`;
+        session.logger.info(
+          `Sending to OpenClaw: ${openclawUrl} prompt="${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}"`
+        );
+        streamOpenClawResponse(openclawConfig, prompt, callbacks, {
           user: userId,
           systemPrompt: getOpenClawSystemPrompt(),
-        }
-      );
+        });
+      }
     };
+
+    /** Alias for backward compatibility */
+    const sendToOpenClaw = sendToAI;
 
     // Show last answer on reconnect, or welcome if no answer yet
     if (lastAnswer) {
@@ -887,6 +946,21 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
+      // Check for AI mode voice command (claude mode / openclaw mode / switch mode)
+      const aiModeCmd = getAIModeVoiceCommand(text);
+      if (aiModeCmd !== null) {
+        if (aiModeCmd === "toggle") {
+          entry.aiMode = entry.aiMode === "openclaw" ? "claude" : "openclaw";
+        } else {
+          entry.aiMode = aiModeCmd;
+        }
+        const modeName = entry.aiMode === "claude" ? "Claude" : "OpenClaw";
+        session.layouts.showTextWall(`${modeName} mode.`, { durationMs: 2000 });
+        session.logger.info(`[AIMode] Switched to ${entry.aiMode} mode`);
+        setTimeout(showDashboard, 2000);
+        return;
+      }
+
       // When copilot is on: accumulate in buffer and debounce; do not send on trigger
       if (entry.copilot) {
         copilotBuffer.push(text);
@@ -928,7 +1002,7 @@ class OpenClawBridgeServer extends AppServer {
             headUpStartTranscriptionTimer = null;
             stopDashboardClearTimer();
             setState(SessionState.LISTENING);
-            session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
+            session.layouts.showTextWall("Starting Transcription...", { durationMs: -1 });
           }, HEAD_UP_SUSTAIN_MS);
         }
         return;
@@ -1023,6 +1097,8 @@ app.post("/push-bitmap", pushRoutes.handlePushBitmap);
 app.post("/mic", pushRoutes.handleMic);
 app.post("/copilot", pushRoutes.handleCopilotPost);
 app.get("/copilot", pushRoutes.handleCopilotGet);
+app.post("/mode", pushRoutes.handleModePost);
+app.get("/mode", pushRoutes.handleModeGet);
 app.get("/status", pushRoutes.handleStatus);
 app.get("/debug", pushRoutes.handleDebug);
 // Agent deployment routes
