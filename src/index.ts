@@ -89,14 +89,8 @@ let lastAnswer = "";
 let spyPriceUsd: number | null = null;
 let spyChangePercent: number | null = null;
 
-/** Total 24h fees across all tokenized-stock pools (Vaulto staking). */
-let totalFees24h: number | null = null;
-
 /** Free SPY quote API (no key required). */
 const SPY_QUOTE_URL = "https://stockprices.dev/api/etfs/SPY";
-
-/** Vaulto staking yield / tokenized-stock pools (fees24h per pool). */
-const VAULTO_POOLS_URL = "https://stake.vaulto.ai/api/cache/tokenized-stock-pools";
 
 /** Westwood, LA weather (Open-Meteo, no key required). */
 const WESTWOOD_WEATHER_URL =
@@ -118,22 +112,6 @@ async function fetchSpyPrice(): Promise<void> {
     const change = data?.ChangePercentage;
     if (typeof price === "number") spyPriceUsd = price;
     if (typeof change === "number") spyChangePercent = change;
-  } catch {
-    // Leave existing cache unchanged
-  }
-}
-
-async function fetchStakingFees(): Promise<void> {
-  try {
-    const res = await fetch(VAULTO_POOLS_URL, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; MentraOpenClaw/1.0)" },
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as { pools?: Array<{ fees24h?: number }> };
-    const pools = data?.pools;
-    if (!Array.isArray(pools)) return;
-    const total = pools.reduce((sum, p) => sum + (typeof p.fees24h === "number" ? p.fees24h : 0), 0);
-    totalFees24h = total;
   } catch {
     // Leave existing cache unchanged
   }
@@ -236,13 +214,9 @@ class OpenClawBridgeServer extends AppServer {
     let wordRenderTimer: ReturnType<typeof setTimeout> | null = null;
     let streamComplete = false;
 
-    // Greeting letter-by-letter rendering state
-    let greetingRenderTimer: ReturnType<typeof setTimeout> | null = null;
-    let greetingRenderedText = "";
-    let greetingIndex = 0;
-    /** Clear welcome dashboard if user doesn't look up within this time (ms) */
-    const WELCOME_CLEAR_AFTER_MS = 5000;
-    let welcomeClearTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Clear dashboard if user doesn't look up within this time (ms) */
+    const DASHBOARD_CLEAR_AFTER_MS = 5000;
+    let dashboardClearTimer: ReturnType<typeof setTimeout> | null = null;
     /** Keep finished response on display this long (ms) before clearing */
     const RESPONSE_CLEAR_AFTER_MS = 5000;
     let responseClearTimer: ReturnType<typeof setTimeout> | null = null;
@@ -263,31 +237,16 @@ class OpenClawBridgeServer extends AppServer {
         spyPriceUsd != null
           ? `SPY $${spyPriceUsd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}${spyChangePercent != null ? ` ${spyChangePercent >= 0 ? "+" : ""}${spyChangePercent.toFixed(1)}%` : ""}`
           : "SPY --";
-      const feesLine =
-        totalFees24h != null
-          ? `Fees24h $${totalFees24h.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-          : "Fees24h --";
-      return `${line1}\n${spyLine}\n${feesLine}`;
+      return `${line1}\n${spyLine}`;
     };
 
     const DIVIDER = "---------------------";
 
-    const WELCOME_MESSAGE = "Hey Charlie, What can I help you with today?";
-    const GREETING_LETTER_DELAY_MS = 50;
-
-    /** Stop greeting renderer */
-    const stopGreetingRenderer = () => {
-      if (greetingRenderTimer) {
-        clearTimeout(greetingRenderTimer);
-        greetingRenderTimer = null;
-      }
-    };
-
-    /** Stop the timer that clears the welcome dashboard when user doesn't look up */
-    const stopWelcomeClearTimer = () => {
-      if (welcomeClearTimer) {
-        clearTimeout(welcomeClearTimer);
-        welcomeClearTimer = null;
+    /** Stop the timer that clears the dashboard */
+    const stopDashboardClearTimer = () => {
+      if (dashboardClearTimer) {
+        clearTimeout(dashboardClearTimer);
+        dashboardClearTimer = null;
       }
     };
 
@@ -307,35 +266,16 @@ class OpenClawBridgeServer extends AppServer {
       }
     };
 
-    /** Render next letter of greeting */
-    const renderNextGreetingLetter = () => {
-      if (greetingIndex >= WELCOME_MESSAGE.length) {
-        greetingRenderTimer = null;
-        return;
-      }
-
-      greetingRenderedText += WELCOME_MESSAGE[greetingIndex];
-      greetingIndex++;
-
-      session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\n${greetingRenderedText}`, { durationMs: -1 });
-
-      greetingRenderTimer = setTimeout(renderNextGreetingLetter, GREETING_LETTER_DELAY_MS);
-    };
-
-    /** Display welcome message letter by letter; clear dashboard after 5s if user doesn't look up */
-    const showWelcome = () => {
-      stopGreetingRenderer();
-      stopWelcomeClearTimer();
-      greetingRenderedText = "";
-      greetingIndex = 0;
-      renderNextGreetingLetter();
-      welcomeClearTimer = setTimeout(() => {
-        welcomeClearTimer = null;
+    /** Display dashboard (status line only); clear after timeout if user doesn't look up */
+    const showDashboard = () => {
+      stopDashboardClearTimer();
+      session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}`, { durationMs: -1 });
+      dashboardClearTimer = setTimeout(() => {
+        dashboardClearTimer = null;
         if (state === SessionState.IDLE) {
-          stopGreetingRenderer();
           session.layouts.showTextWall(" ", { durationMs: -1 });
         }
-      }, WELCOME_CLEAR_AFTER_MS);
+      }, DASHBOARD_CLEAR_AFTER_MS);
     };
 
     const entry: registry.SessionEntry = {
@@ -348,13 +288,12 @@ class OpenClawBridgeServer extends AppServer {
       copilotPipeline: { totalFiltered: 0, totalPassed: 0, bufferSize: 0, inflight: false },
       requestListening(listening: boolean) {
         if (listening && state === SessionState.IDLE) {
-          stopWelcomeClearTimer();
+          stopDashboardClearTimer();
           setState(SessionState.LISTENING);
-          stopGreetingRenderer();
           session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
         } else if (!listening && (state === SessionState.LISTENING || state === SessionState.DICTATING)) {
           setState(SessionState.IDLE);
-          showWelcome();
+          showDashboard();
         }
       },
       showPushText(text: string, durationMs: number) {
@@ -516,7 +455,7 @@ class OpenClawBridgeServer extends AppServer {
           renderedWordCount = 0;
           streamComplete = false;
           if (noReply) {
-            showWelcome();
+            showDashboard();
           } else {
             // Keep response on display for 5s, then clear
             stopResponseClearTimer();
@@ -613,7 +552,7 @@ class OpenClawBridgeServer extends AppServer {
       setState(SessionState.IDLE);
       transcriptView.clear();
       session.layouts.showTextWall("Cleared.", { durationMs: 1000 });
-      setTimeout(showWelcome, 1000);
+      setTimeout(showDashboard, 1000);
     };
 
     /** Build prompt payload from transcript */
@@ -635,7 +574,6 @@ class OpenClawBridgeServer extends AppServer {
     /** Show transcript on display with ScrollView */
     const showTranscript = () => {
       if (state === SessionState.SENDING || state === SessionState.STREAMING) return;
-      stopGreetingRenderer();
       const final = transcriptSegments.join(" ").trim();
       const display = currentInterim
         ? (final ? `${final} ${currentInterim}` : currentInterim)
@@ -666,12 +604,12 @@ class OpenClawBridgeServer extends AppServer {
         const status = getAgentStatus();
         if (agentType === "cursor" && !status.cursor.configured) {
           session.layouts.showTextWall("Cursor not configured. Set CURSOR_API_KEY.", { durationMs: 5000 });
-          setTimeout(() => { setState(SessionState.IDLE); showWelcome(); }, 5000);
+          setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
           return;
         }
         if (agentType === "claude" && !status.claude.configured) {
           session.layouts.showTextWall("Claude not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
-          setTimeout(() => { setState(SessionState.IDLE); showWelcome(); }, 5000);
+          setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
           return;
         }
 
@@ -701,7 +639,7 @@ class OpenClawBridgeServer extends AppServer {
         session.logger.error(`[AgentDeploy] Error: ${message}`);
       }
 
-      setTimeout(() => { setState(SessionState.IDLE); showWelcome(); }, 5000);
+      setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
     };
 
     /** Send prompt to OpenClaw */
@@ -824,7 +762,7 @@ class OpenClawBridgeServer extends AppServer {
               session.layouts.showTextWall("Done.", { durationMs: 2000 });
               setTimeout(() => {
                 setState(SessionState.IDLE);
-                showWelcome();
+                showDashboard();
               }, 2000);
             }
             // Otherwise renderNextWord handles transition when done
@@ -844,7 +782,7 @@ class OpenClawBridgeServer extends AppServer {
               pendingSpace = false;
               renderedWordCount = 0;
               streamComplete = false;
-              showWelcome();
+              showDashboard();
             }, 5000);
           },
         },
@@ -859,7 +797,7 @@ class OpenClawBridgeServer extends AppServer {
     if (lastAnswer) {
       session.layouts.showTextWall(lastAnswer, { durationMs: -1 });
     } else {
-      showWelcome();
+      showDashboard();
     }
 
     // Handle transcription events
@@ -945,7 +883,7 @@ class OpenClawBridgeServer extends AppServer {
           `Copilot ${entry.copilot ? "on" : "off"}.`,
           { durationMs: 2000 }
         );
-        setTimeout(showWelcome, 2000);
+        setTimeout(showDashboard, 2000);
         return;
       }
 
@@ -968,7 +906,7 @@ class OpenClawBridgeServer extends AppServer {
           sendToOpenClaw(payload);
         } else {
           session.layouts.showTextWall("Say something before the trigger word.", { durationMs: 2000 });
-          setTimeout(showWelcome, 2000);
+          setTimeout(showDashboard, 2000);
         }
         return;
       }
@@ -988,8 +926,7 @@ class OpenClawBridgeServer extends AppServer {
         if (state === SessionState.IDLE && !headUpStartTranscriptionTimer) {
           headUpStartTranscriptionTimer = setTimeout(() => {
             headUpStartTranscriptionTimer = null;
-            stopWelcomeClearTimer();
-            stopGreetingRenderer();
+            stopDashboardClearTimer();
             setState(SessionState.LISTENING);
             session.layouts.showTextWall(`${getStatusLine()}\n${DIVIDER}\nStarting Transcription...`, { durationMs: -1 });
           }, HEAD_UP_SUSTAIN_MS);
@@ -1013,7 +950,7 @@ class OpenClawBridgeServer extends AppServer {
         responseView.clear();
         setState(SessionState.IDLE);
         lastAnswer = "";
-        showWelcome();
+        showDashboard();
         return;
       }
 
@@ -1021,7 +958,7 @@ class OpenClawBridgeServer extends AppServer {
         stopResponseClearTimer();
         lastAnswer = "";
         responseView.clear();
-        showWelcome();
+        showDashboard();
         return;
       }
 
@@ -1046,7 +983,7 @@ class OpenClawBridgeServer extends AppServer {
           }
         } else {
           setState(SessionState.IDLE);
-          showWelcome();
+          showDashboard();
         }
       }
     });
@@ -1064,8 +1001,7 @@ class OpenClawBridgeServer extends AppServer {
       unsubHeadPosition();
       unsubGlassesBattery();
       stopWordRenderer();
-      stopGreetingRenderer();
-      stopWelcomeClearTimer();
+      stopDashboardClearTimer();
       stopResponseClearTimer();
       stopHeadUpStartTranscriptionTimer();
       stopPushScroll();
@@ -1157,10 +1093,8 @@ if (process.env.NODE_ENV !== "test") {
   server.start()
     .then(() => {
       fetchSpyPrice();
-      fetchStakingFees();
       fetchWestwoodWeather();
       setInterval(fetchSpyPrice, 60_000);
-      setInterval(fetchStakingFees, 60_000);
       setInterval(fetchWestwoodWeather, 60_000);
     })
     .catch((err) => {
