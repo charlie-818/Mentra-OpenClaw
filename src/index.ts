@@ -212,6 +212,15 @@ class OpenClawBridgeServer extends AppServer {
     // State machine
     let state: SessionState = SessionState.IDLE;
 
+    // Register session for mirror display
+    registerMirrorSession(sessionId);
+
+    // Wrapper to update mirror state on every display update
+    const showDisplay = (text: string, opts?: { durationMs?: number }) => {
+      session.layouts.showTextWall(text, opts);
+      updateMirrorDisplay(sessionId, text);
+    };
+
     // Transcript segments for building the prompt
     let transcriptSegments: string[] = [];
 
@@ -289,11 +298,11 @@ class OpenClawBridgeServer extends AppServer {
     /** Display dashboard (status line only); clear after timeout if user doesn't look up */
     const showDashboard = () => {
       stopDashboardClearTimer();
-      session.layouts.showTextWall(getStatusLine(), { durationMs: -1 });
+      showDisplay(getStatusLine(), { durationMs: -1 });
       dashboardClearTimer = setTimeout(() => {
         dashboardClearTimer = null;
         if (state === SessionState.IDLE) {
-          session.layouts.showTextWall(" ", { durationMs: -1 });
+          showDisplay(" ", { durationMs: -1 });
         }
       }, DASHBOARD_CLEAR_AFTER_MS);
     };
@@ -311,7 +320,7 @@ class OpenClawBridgeServer extends AppServer {
         if (listening && state === SessionState.IDLE) {
           stopDashboardClearTimer();
           setState(SessionState.LISTENING);
-          session.layouts.showTextWall("Starting Transcription...", { durationMs: -1 });
+          showDisplay("Starting Transcription...", { durationMs: -1 });
         } else if (!listening && (state === SessionState.LISTENING || state === SessionState.DICTATING)) {
           setState(SessionState.IDLE);
           showDashboard();
@@ -325,7 +334,7 @@ class OpenClawBridgeServer extends AppServer {
 
         const displayPushViewport = () => {
           const viewport = pushView.getViewport();
-          session.layouts.showTextWall(joinViewportLinesWithSpaces(viewport.lines), { durationMs: -1 });
+          showDisplay(joinViewportLinesWithSpaces(viewport.lines), { durationMs: -1 });
         };
 
         const renderNextPushWord = () => {
@@ -369,6 +378,7 @@ class OpenClawBridgeServer extends AppServer {
     const setState = (s: SessionState) => {
       state = s;
       entry.state = s as registry.SessionStateLabel;
+      updateMirrorSessionState(sessionId, s, entry.copilot);
       if (s === SessionState.IDLE) setImmediate(tryProcessPendingCopilotBatch);
     };
 
@@ -455,7 +465,7 @@ class OpenClawBridgeServer extends AppServer {
     const displayResponseView = () => {
       const viewport = responseView.getViewport();
       const text = joinViewportLinesWithSpaces(viewport.lines);
-      session.layouts.showTextWall(text, { durationMs: -1 });
+      showDisplay(text, { durationMs: -1 });
     };
 
     /** Render next word from buffer */
@@ -483,7 +493,7 @@ class OpenClawBridgeServer extends AppServer {
             responseClearTimer = setTimeout(() => {
               responseClearTimer = null;
               if (state === SessionState.IDLE) {
-                session.layouts.showTextWall(" ", { durationMs: -1 });
+                showDisplay(" ", { durationMs: -1 });
               }
             }, RESPONSE_CLEAR_AFTER_MS);
           }
@@ -579,16 +589,36 @@ class OpenClawBridgeServer extends AppServer {
       return null;
     };
 
-    /** Clear transcript and reset to idle */
-    const clearTranscript = (fromInterim = false) => {
+    /** Clear display from any state - hides all text silently */
+    const clearDisplay = (fromInterim = false) => {
+      // Stop any ongoing streaming/rendering
+      stopWordRenderer();
+      stopResponseClearTimer();
+      stopDashboardClearTimer();
+
+      // Clear all state
       transcriptSegments = [];
       currentInterim = "";
       lastInterimTriggerText = "";
       clearedFromInterim = fromInterim;
-      setState(SessionState.IDLE);
+      responseBuffer = "";
+      pendingSpace = false;
+      renderedWordCount = 0;
+      streamComplete = false;
+      lastAnswer = "";
+
+      // Clear views
       transcriptView.clear();
-      session.layouts.showTextWall("Cleared.", { durationMs: 1000 });
-      setTimeout(showDashboard, 1000);
+      responseView.clear();
+
+      // Set to IDLE and hide display (blank screen)
+      setState(SessionState.IDLE);
+      showDisplay(" ", { durationMs: -1 });
+    };
+
+    /** Clear transcript and reset to idle (alias for clearDisplay) */
+    const clearTranscript = (fromInterim = false) => {
+      clearDisplay(fromInterim);
     };
 
     /** Build prompt payload from transcript */
@@ -604,7 +634,7 @@ class OpenClawBridgeServer extends AppServer {
     const displayTranscriptView = () => {
       const viewport = transcriptView.getViewport();
       const text = joinViewportLinesWithSpaces(viewport.lines);
-      session.layouts.showTextWall(text, { durationMs: -1 });
+      showDisplay(text, { durationMs: -1 });
     };
 
     /** Show transcript on display with ScrollView */
@@ -632,19 +662,19 @@ class OpenClawBridgeServer extends AppServer {
       transcriptView.clear();
 
       const agentName = agentType === "cursor" ? "Cursor" : "Claude";
-      session.layouts.showTextWall(`Deploying ${agentName} agent...`, { durationMs: -1 });
+      showDisplay(`Deploying ${agentName} agent...`, { durationMs: -1 });
       session.logger.info(`[AgentDeploy] Deploying ${agentType} agent: "${prompt.slice(0, 50)}..."`);
 
       try {
         // Check if configured
         const status = getAgentStatus();
         if (agentType === "cursor" && !status.cursor.configured) {
-          session.layouts.showTextWall("Cursor not configured. Set CURSOR_API_KEY.", { durationMs: 5000 });
+          showDisplay("Cursor not configured. Set CURSOR_API_KEY.", { durationMs: 5000 });
           setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
           return;
         }
         if (agentType === "claude" && !status.claude.configured) {
-          session.layouts.showTextWall("Claude not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
+          showDisplay("Claude not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
           setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
           return;
         }
@@ -663,15 +693,15 @@ class OpenClawBridgeServer extends AppServer {
         if (result.success) {
           const statusText = result.status === "RUNNING" ? "running" : "deployed";
           const idShort = result.agentId?.slice(-8) || "";
-          session.layouts.showTextWall(`${agentName} agent ${statusText}${idShort ? `: ${idShort}` : ""}`, { durationMs: 5000 });
+          showDisplay(`${agentName} agent ${statusText}${idShort ? `: ${idShort}` : ""}`, { durationMs: 5000 });
           session.logger.info(`[AgentDeploy] Success: ${result.agentId} status=${result.status}`);
         } else {
-          session.layouts.showTextWall(`Deploy failed: ${result.error?.slice(0, 50)}`, { durationMs: 5000 });
+          showDisplay(`Deploy failed: ${result.error?.slice(0, 50)}`, { durationMs: 5000 });
           session.logger.error(`[AgentDeploy] Failed: ${result.error}`);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        session.layouts.showTextWall(`Error: ${message.slice(0, 50)}`, { durationMs: 5000 });
+        showDisplay(`Error: ${message.slice(0, 50)}`, { durationMs: 5000 });
         session.logger.error(`[AgentDeploy] Error: ${message}`);
       }
 
@@ -751,7 +781,7 @@ class OpenClawBridgeServer extends AppServer {
         streamComplete = true;
         if (responseBuffer.length === 0) {
           currentSendIsCopilot = false;
-          session.layouts.showTextWall("Done.", { durationMs: 2000 });
+          showDisplay("Done.", { durationMs: 2000 });
           setTimeout(() => {
             setState(SessionState.IDLE);
             showDashboard();
@@ -764,7 +794,7 @@ class OpenClawBridgeServer extends AppServer {
         stopWordRenderer();
         const message = err instanceof Error ? err.message : String(err);
         const backend = entry.aiMode === "claude" ? "Claude Code" : "OpenClaw";
-        session.layouts.showTextWall(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
+        showDisplay(`Error: ${message.slice(0, 60)}`, { durationMs: 5000 });
         session.logger.error(
           { err: err instanceof Error ? err.stack : String(err) },
           `${backend} request failed`
@@ -815,14 +845,14 @@ class OpenClawBridgeServer extends AppServer {
       streamComplete = false;
       responseView.clear();
 
-      session.layouts.showTextWall("Thinking...", { durationMs: -1 });
+      showDisplay("Thinking...", { durationMs: -1 });
 
       const callbacks = getStreamCallbacks();
 
       // Route to appropriate AI backend based on mode
       if (entry.aiMode === "claude") {
         if (!claudeCodeConfig) {
-          session.layouts.showTextWall("Claude Code not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
+          showDisplay("Claude Code not configured. Set ANTHROPIC_API_KEY.", { durationMs: 5000 });
           setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
           return;
         }
@@ -834,7 +864,7 @@ class OpenClawBridgeServer extends AppServer {
         });
       } else {
         if (!openclawConfig) {
-          session.layouts.showTextWall("OpenClaw not configured. Set OPENCLAW_GATEWAY_URL.", { durationMs: 5000 });
+          showDisplay("OpenClaw not configured. Set OPENCLAW_GATEWAY_URL.", { durationMs: 5000 });
           setTimeout(() => { setState(SessionState.IDLE); showDashboard(); }, 5000);
           return;
         }
@@ -854,7 +884,7 @@ class OpenClawBridgeServer extends AppServer {
 
     // Show last answer on reconnect, or welcome if no answer yet
     if (lastAnswer) {
-      session.layouts.showTextWall(lastAnswer, { durationMs: -1 });
+      showDisplay(lastAnswer, { durationMs: -1 });
     } else {
       showDashboard();
     }
@@ -863,7 +893,13 @@ class OpenClawBridgeServer extends AppServer {
     const unsubTranscription = session.events.onTranscription((data) => {
       const text = data.text?.trim() ?? "";
 
-      // Ignore transcription while idle (welcome showing), sending, or streaming
+      // Check for clear command FIRST - works in any state, hides display without transcribing
+      if (text && isClearCommand(text)) {
+        clearDisplay(data.isFinal ? false : true);
+        return;
+      }
+
+      // Ignore other transcription while idle (welcome showing), sending, or streaming
       if (state === SessionState.IDLE || state === SessionState.SENDING || state === SessionState.STREAMING) {
         return;
       }
@@ -871,13 +907,6 @@ class OpenClawBridgeServer extends AppServer {
       if (!data.isFinal) {
         // Interim transcription
         currentInterim = text;
-
-        // Check for clear command in interim for instant response
-        if (isClearCommand(text)) {
-          currentInterim = "";
-          clearTranscript(true);
-          return;
-        }
 
         // Check for trigger in interim for faster response (skip when copilot on)
         const trigger = getTriggerMatch(text);
@@ -922,12 +951,6 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
       lastInterimTriggerText = "";
-
-      // Check for clear command
-      if (isClearCommand(text)) {
-        clearTranscript(false);
-        return;
-      }
 
       const copilotCmd = getCopilotVoiceCommand(text);
       if (copilotCmd !== null) {
@@ -1071,6 +1094,7 @@ class OpenClawBridgeServer extends AppServer {
       session.logger.info(`Session ${sessionId} disconnected.`);
       clearCopilotDebounce();
       registry.unregister(sessionId);
+      clearMirrorSession(sessionId);
       unsubTranscription();
       unsubHeadPosition();
       unsubGlassesBattery();
@@ -1161,6 +1185,15 @@ app.get("/preview/state", (_req, res) => {
 
 app.get("/preview", (_req, res) => {
   const url = new URL("../public/preview.html", import.meta.url);
+  res.sendFile(url.pathname);
+});
+
+app.get("/mirror/state", (_req, res) => {
+  res.json(getMirrorState());
+});
+
+app.get("/mirror", (_req, res) => {
+  const url = new URL("../public/mirror.html", import.meta.url);
   res.sendFile(url.pathname);
 });
 export { app, server };
