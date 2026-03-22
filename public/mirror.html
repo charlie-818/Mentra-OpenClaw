@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Glasses Display Mirror</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #0f172a;
+        color: #e5e7eb;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+      }
+      p {
+        margin-top: 0;
+        margin-bottom: 1rem;
+        color: #9ca3af;
+      }
+      .card {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 24px;
+        border-radius: 16px;
+        background: #020617;
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.7);
+        border: 1px solid #1e293b;
+      }
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+      .badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 600;
+      }
+      .badge-state {
+        background: #111827;
+        border: 1px solid #1f2937;
+        color: #9ca3af;
+      }
+      .badge-state.idle {
+        background: #1e3a5f;
+        border-color: #38bdf8;
+        color: #7dd3fc;
+      }
+      .badge-state.listening {
+        background: #1e3a3e;
+        border-color: #2dd4bf;
+        color: #5eead4;
+      }
+      .badge-state.dictating {
+        background: #3b2e1a;
+        border-color: #fbbf24;
+        color: #fcd34d;
+      }
+      .badge-state.sending {
+        background: #3b1a3b;
+        border-color: #c084fc;
+        color: #d8b4fe;
+      }
+      .badge-state.streaming {
+        background: #1a2e3b;
+        border-color: #22d3ee;
+        color: #67e8f9;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      .badge-state.disconnected {
+        background: #3b1a1a;
+        border-color: #ef4444;
+        color: #fca5a5;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
+      .badge-copilot {
+        background: #1e3a5f;
+        border: 1px solid #38bdf8;
+        color: #7dd3fc;
+      }
+      .badge-copilot.off {
+        background: #111827;
+        border-color: #374151;
+        color: #6b7280;
+      }
+      .badge-sessions {
+        background: #111827;
+        border: 1px solid #374151;
+        color: #9ca3af;
+      }
+      .frame {
+        margin-top: 1rem;
+        border-radius: 14px;
+        border: 1px solid #1f2937;
+        background: radial-gradient(circle at top left, #0f172a, #020617);
+        padding: 16px 18px;
+      }
+      .frame-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        margin-bottom: 0.3rem;
+        color: #6b7280;
+      }
+      .frame-inner {
+        border-radius: 10px;
+        border: 1px solid #4b5563;
+        padding: 12px 14px;
+        background: #020617;
+        color: #e5e7eb;
+        font-family: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        min-height: 120px;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .no-session {
+        color: #6b7280;
+        font-style: italic;
+      }
+      .updated {
+        font-size: 0.75rem;
+        color: #6b7280;
+        margin-top: 0.75rem;
+        text-align: right;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Glasses Display Mirror</h1>
+      <p>
+        Real-time view of what's currently shown on the connected glasses.
+      </p>
+
+      <div class="badges">
+        <span id="stateBadge" class="badge badge-state disconnected">Disconnected</span>
+        <span id="copilotBadge" class="badge badge-copilot off">Copilot Off</span>
+        <span id="sessionsBadge" class="badge badge-sessions">Sessions: 0</span>
+      </div>
+
+      <div class="frame">
+        <div class="frame-title">Glasses Display</div>
+        <div id="content" class="frame-inner no-session">
+          No glasses connected
+        </div>
+      </div>
+
+      <div id="updated" class="updated"></div>
+    </main>
+
+    <script>
+      const stateBadge = document.getElementById("stateBadge");
+      const copilotBadge = document.getElementById("copilotBadge");
+      const sessionsBadge = document.getElementById("sessionsBadge");
+      const contentEl = document.getElementById("content");
+      const updatedEl = document.getElementById("updated");
+
+      function formatTime(timestamp) {
+        if (!timestamp) return "";
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString();
+      }
+
+      function updateStateBadge(state) {
+        stateBadge.className = "badge badge-state";
+        if (!state) {
+          stateBadge.textContent = "Disconnected";
+          stateBadge.classList.add("disconnected");
+        } else {
+          stateBadge.textContent = state;
+          stateBadge.classList.add(state.toLowerCase());
+        }
+      }
+
+      function updateCopilotBadge(copilot) {
+        copilotBadge.textContent = copilot ? "Copilot On" : "Copilot Off";
+        copilotBadge.className = copilot
+          ? "badge badge-copilot"
+          : "badge badge-copilot off";
+      }
+
+      function updateDisplay(data) {
+        updateStateBadge(data.sessionState);
+        updateCopilotBadge(data.copilot);
+        sessionsBadge.textContent = `Sessions: ${data.sessionCount}`;
+
+        if (!data.sessionId) {
+          contentEl.textContent = "No glasses connected";
+          contentEl.className = "frame-inner no-session";
+        } else {
+          contentEl.textContent = data.displayContent || " ";
+          contentEl.className = "frame-inner";
+        }
+
+        if (data.updatedAt) {
+          updatedEl.textContent = `Updated: ${formatTime(data.updatedAt)}`;
+        } else {
+          updatedEl.textContent = "";
+        }
+      }
+
+      async function fetchState() {
+        try {
+          const res = await fetch("/mirror/state");
+          if (!res.ok) {
+            throw new Error("Failed to fetch mirror state");
+          }
+          const data = await res.json();
+          updateDisplay(data);
+        } catch (err) {
+          console.error("Error fetching mirror state:", err);
+        }
+      }
+
+      // Initial fetch
+      fetchState();
+
+      // Poll every 500ms for real-time updates
+      setInterval(fetchState, 500);
+    </script>
+  </body>
+</html>

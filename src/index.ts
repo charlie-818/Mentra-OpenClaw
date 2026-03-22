@@ -961,7 +961,7 @@ class OpenClawBridgeServer extends AppServer {
         } else {
           entry.copilot = false;
         }
-        session.layouts.showTextWall(
+        showDisplay(
           `Copilot ${entry.copilot ? "on" : "off"}.`,
           { durationMs: 2000 }
         );
@@ -978,7 +978,7 @@ class OpenClawBridgeServer extends AppServer {
           entry.aiMode = aiModeCmd;
         }
         const modeName = entry.aiMode === "claude" ? "Claude" : "OpenClaw";
-        session.layouts.showTextWall(`${modeName} mode.`, { durationMs: 2000 });
+        showDisplay(`${modeName} mode.`, { durationMs: 2000 });
         session.logger.info(`[AIMode] Switched to ${entry.aiMode} mode`);
         setTimeout(showDashboard, 2000);
         return;
@@ -1002,7 +1002,7 @@ class OpenClawBridgeServer extends AppServer {
         if (payload) {
           sendToOpenClaw(payload);
         } else {
-          session.layouts.showTextWall("Say something before the trigger word.", { durationMs: 2000 });
+          showDisplay("Say something before the trigger word.", { durationMs: 2000 });
           setTimeout(showDashboard, 2000);
         }
         return;
@@ -1025,7 +1025,7 @@ class OpenClawBridgeServer extends AppServer {
             headUpStartTranscriptionTimer = null;
             stopDashboardClearTimer();
             setState(SessionState.LISTENING);
-            session.layouts.showTextWall("Starting Transcription...", { durationMs: -1 });
+            showDisplay("Starting Transcription...", { durationMs: -1 });
           }, HEAD_UP_SUSTAIN_MS);
         }
         return;

@@ -6,6 +6,7 @@
 import type { Request, Response } from "express";
 import * as registry from "./session-registry.js";
 import { getOpenClawConfigFromEnv } from "./openclaw.js";
+import { getClaudeCodeConfigFromEnv } from "./claude-code.js";
 import {
   deployAgent,
   getAgentStatus,
@@ -115,6 +116,50 @@ export function handleCopilotGet(req: Request, res: Response): void {
   });
 }
 
+/** POST /mode — set AI mode (openclaw or claude) */
+export function handleModePost(req: Request, res: Response): void {
+  if (!checkAuth(req)) {
+    jsonErr(res, 401, "Unauthorized");
+    return;
+  }
+  const entry = registry.getFirst();
+  if (!entry) {
+    jsonOk(res, { ok: false, error: "No active session" });
+    return;
+  }
+  const body = req.body as { mode?: string } | undefined;
+  const requestedMode = body?.mode?.toLowerCase();
+  if (requestedMode === "claude" || requestedMode === "openclaw") {
+    entry.aiMode = requestedMode;
+  } else if (requestedMode === "toggle") {
+    entry.aiMode = entry.aiMode === "openclaw" ? "claude" : "openclaw";
+  } else {
+    jsonErr(res, 400, "mode must be 'openclaw', 'claude', or 'toggle'");
+    return;
+  }
+  jsonOk(res, { ok: true, sessions: registry.getAll().length, aiMode: entry.aiMode });
+}
+
+/** GET /mode — get current AI mode */
+export function handleModeGet(req: Request, res: Response): void {
+  if (!checkAuth(req)) {
+    jsonErr(res, 401, "Unauthorized");
+    return;
+  }
+  const entry = registry.getFirst();
+  const openclaw = !!getOpenClawConfigFromEnv();
+  const claudeCode = !!getClaudeCodeConfigFromEnv();
+  jsonOk(res, {
+    ok: true,
+    sessions: registry.getAll().length,
+    aiMode: entry?.aiMode ?? "openclaw",
+    available: {
+      openclaw,
+      claudeCode,
+    },
+  });
+}
+
 /** GET /status */
 export function handleStatus(req: Request, res: Response): void {
   if (!checkAuth(req)) {
@@ -124,9 +169,12 @@ export function handleStatus(req: Request, res: Response): void {
   const entries = registry.getAll();
   const first = entries[0];
   const openclaw = !!getOpenClawConfigFromEnv();
+  const claudeCode = !!getClaudeCodeConfigFromEnv();
   jsonOk(res, {
     ok: true,
     openclaw,
+    claudeCode,
+    aiMode: first?.aiMode ?? "openclaw",
     sessions: entries.length,
     listening:
       first?.state === "LISTENING" || first?.state === "DICTATING" || false,
@@ -141,6 +189,7 @@ export function handleDebug(req: Request, res: Response): void {
     return;
   }
   const openclaw = !!getOpenClawConfigFromEnv();
+  const claudeCode = !!getClaudeCodeConfigFromEnv();
   const sessions: Record<string, object> = {};
   for (const e of registry.getAll()) {
     const lastAgo =
@@ -150,6 +199,7 @@ export function handleDebug(req: Request, res: Response): void {
     sessions[e.sessionId] = {
       listening: e.state === "LISTENING" || e.state === "DICTATING",
       copilot: e.copilot,
+      aiMode: e.aiMode,
       lastTranscriptAgo: lastAgo,
       copilotPipeline: e.copilotPipeline,
     };
@@ -157,6 +207,7 @@ export function handleDebug(req: Request, res: Response): void {
   jsonOk(res, {
     ok: true,
     openclaw,
+    claudeCode,
     totalSessions: registry.getAll().length,
     sessions,
   });

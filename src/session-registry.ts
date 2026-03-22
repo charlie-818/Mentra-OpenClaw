@@ -12,6 +12,9 @@ export type SessionStateLabel =
   | "SENDING"
   | "STREAMING";
 
+/** AI backend mode */
+export type AIMode = "openclaw" | "claude";
+
 export interface SessionEntry {
   session: AppSession;
   sessionId: string;
@@ -20,6 +23,8 @@ export interface SessionEntry {
   state: SessionStateLabel;
   /** Copilot mode on/off; mutated by session handler */
   copilot: boolean;
+  /** AI backend mode (openclaw or claude); mutated by session handler */
+  aiMode: AIMode;
   /** Last time we received a final transcript (ms since epoch); mutated by session handler */
   lastTranscriptAt: number | null;
   /** Copilot pipeline stats; mutated by session handler */
