@@ -23,28 +23,17 @@ import { existsSync, realpathSync } from "fs";
 const PORT = parseInt(process.env.CLAUDE_RELAY_PORT || "3456", 10);
 const AUTH_TOKEN = process.env.CLAUDE_RELAY_TOKEN || "";
 
-/** Find claude CLI path and return [executable, args] for spawn */
-function getClaudeCommand(): [string, string[]] {
+/** Get full PATH for spawning commands */
+function getFullPath(): string {
   const home = homedir();
-  const paths = [
-    `${home}/.npm-packages/bin/claude`,
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude",
-    `${home}/.local/bin/claude`,
-    `${home}/.bun/bin/claude`,
+  const extraPaths = [
+    `${home}/.npm-packages/bin`,
+    `${home}/.bun/bin`,
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    `${home}/.local/bin`,
   ];
-
-  for (const p of paths) {
-    if (existsSync(p)) {
-      // Use node directly to avoid shebang/env issues
-      const nodePath = process.execPath; // Current node binary
-      const realPath = realpathSync(p);
-      console.log(`[Relay] Found CLI at ${p} -> ${realPath}`);
-      return [nodePath, [realPath]];
-    }
-  }
-
-  throw new Error("Claude CLI not found");
+  return [...extraPaths, process.env.PATH || ""].join(":");
 }
 
 /** Find claude CLI path (for health check) */
@@ -112,15 +101,14 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
   });
 
   try {
-    const [executable, baseArgs] = getClaudeCommand();
-    const args = [...baseArgs, "-p", query];
-    console.log(`[Relay] Spawning: ${executable} ${args.join(" ").slice(0, 80)}...`);
+    const claudePath = getClaudeCliPath();
+    console.log(`[Relay] Using CLI: ${claudePath}`);
 
-    // Remove ANTHROPIC_API_KEY so Claude uses Max subscription instead of API credits
-    const env = { ...process.env };
+    // Build environment with extended PATH and no API key
+    const env = { ...process.env, PATH: getFullPath() };
     delete env.ANTHROPIC_API_KEY;
 
-    const child = spawn(executable, args, {
+    const child = spawn(claudePath, ["-p", query], {
       cwd: workingDir || process.cwd(),
       env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -128,15 +116,27 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
 
     child.stdin?.end();
 
+    let ended = false;
+    const safeWrite = (data: string) => {
+      if (!ended) {
+        try { res.write(data); } catch {}
+      }
+    };
+    const safeEnd = () => {
+      if (!ended) {
+        ended = true;
+        try { res.end(); } catch {}
+      }
+    };
+
     child.on("error", (err) => {
       console.error(`[Relay] Spawn error: ${err.message}`);
-      res.write(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
-      res.end();
+      safeWrite(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
+      safeEnd();
     });
 
     child.stdout?.on("data", (data: Buffer) => {
-      const chunk = data.toString();
-      res.write(`data: ${JSON.stringify({ type: "delta", text: chunk })}\n\n`);
+      safeWrite(`data: ${JSON.stringify({ type: "delta", text: data.toString() })}\n\n`);
     });
 
     child.stderr?.on("data", (data: Buffer) => {
@@ -145,16 +145,11 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
 
     child.on("close", (code) => {
       if (code === 0) {
-        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ type: "done" })}\n\n`);
       } else {
-        res.write(`data: ${JSON.stringify({ type: "error", error: `Exit code ${code}` })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ type: "error", error: `Exit code ${code}` })}\n\n`);
       }
-      res.end();
-    });
-
-    child.on("error", (err) => {
-      res.write(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
-      res.end();
+      safeEnd();
     });
 
     // Timeout after 60s
