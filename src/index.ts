@@ -242,6 +242,9 @@ class OpenClawBridgeServer extends AppServer {
     // Track if we cleared from interim to skip the matching final
     let clearedFromInterim = false;
 
+    // Track if we triggered AI mode from interim to skip the matching final
+    let aiModeTriggeredFromInterim = false;
+
     // Response buffer for streaming
     let responseBuffer = "";
     // Track if next content needs a leading space (set when we receive whitespace-only deltas)
@@ -625,6 +628,7 @@ class OpenClawBridgeServer extends AppServer {
       currentInterim = "";
       lastInterimTriggerText = "";
       clearedFromInterim = fromInterim;
+      aiModeTriggeredFromInterim = false;
       responseBuffer = "";
       pendingSpace = false;
       renderedWordCount = 0;
@@ -930,7 +934,15 @@ class OpenClawBridgeServer extends AppServer {
 
       // Check for AI mode switch commands - works in any state, doesn't transcribe
       const aiModeCmd = getAIModeVoiceCommand(text);
-      if (aiModeCmd !== null && data.isFinal) {
+      if (aiModeCmd !== null) {
+        // Skip if already triggered from interim
+        if (data.isFinal && aiModeTriggeredFromInterim) {
+          aiModeTriggeredFromInterim = false;
+          return;
+        }
+        if (!data.isFinal) {
+          aiModeTriggeredFromInterim = true;
+        }
         if (aiModeCmd === "toggle") {
           entry.aiMode = entry.aiMode === "openclaw" ? "claude" : "openclaw";
         } else {
