@@ -579,6 +579,12 @@ class OpenClawBridgeServer extends AppServer {
       return clears.some((c) => s === c || s.endsWith(" " + c));
     };
 
+    /** Check if text is a "hey" command to show dashboard */
+    const isHeyCommand = (text: string): boolean => {
+      const s = text.trim().toLowerCase();
+      return s === "hey" || s.startsWith("hey ") || s.endsWith(" hey");
+    };
+
     /** Check for copilot voice command; returns "on" | "off" | "toggle" | null */
     const getCopilotVoiceCommand = (text: string): "on" | "off" | "toggle" | null => {
       const s = text.trim().toLowerCase();
@@ -909,6 +915,12 @@ class OpenClawBridgeServer extends AppServer {
       // Check for clear command FIRST - works in any state, hides display without transcribing
       if (text && isClearCommand(text)) {
         clearDisplay(data.isFinal ? false : true);
+        return;
+      }
+
+      // Check for "hey" command - works in any state, shows the dashboard
+      if (text && isHeyCommand(text)) {
+        showDashboard();
         return;
       }
 
