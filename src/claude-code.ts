@@ -10,6 +10,9 @@ import { homedir } from "os";
 /** Cache the resolved claude CLI path */
 let claudeCliPath: string | null = null;
 
+/** Paths that were checked (for error reporting) */
+let checkedPaths: string[] = [];
+
 /**
  * Find the claude CLI path. Checks common locations and uses `which` as fallback.
  */
@@ -17,23 +20,23 @@ function getClaudeCliPath(): string {
   if (claudeCliPath) return claudeCliPath;
 
   const home = homedir();
+  checkedPaths = [];
   console.log(`[ClaudeCode] Looking for CLI, HOME=${home}`);
 
   // Common installation paths
   const commonPaths = [
     `${home}/.npm-packages/bin/claude`,
-    `${home}/.nvm/versions/node/*/bin/claude`, // NVM installations
     "/usr/local/bin/claude",
     "/opt/homebrew/bin/claude",
     `${home}/.local/bin/claude`,
     `${home}/.bun/bin/claude`,
+    `${home}/.nvm/current/bin/claude`,
   ];
 
   // Check common paths first
   for (const p of commonPaths) {
-    // Skip glob patterns
-    if (p.includes("*")) continue;
-    console.log(`[ClaudeCode] Checking: ${p}`);
+    checkedPaths.push(p);
+    console.log(`[ClaudeCode] Checking: ${p} -> ${existsSync(p) ? "EXISTS" : "not found"}`);
     if (existsSync(p)) {
       console.log(`[ClaudeCode] Found at: ${p}`);
       claudeCliPath = p;
@@ -45,6 +48,7 @@ function getClaudeCliPath(): string {
   try {
     const shellPath = process.env.PATH || "/usr/local/bin:/usr/bin:/bin";
     const extendedPath = `${home}/.npm-packages/bin:${home}/.bun/bin:/opt/homebrew/bin:${shellPath}`;
+    console.log(`[ClaudeCode] Running 'which claude' with PATH=${extendedPath.slice(0, 100)}...`);
     const result = execSync("which claude", {
       encoding: "utf-8",
       env: { ...process.env, PATH: extendedPath }
@@ -55,12 +59,22 @@ function getClaudeCliPath(): string {
       return result;
     }
   } catch (err) {
-    console.log(`[ClaudeCode] which command failed:`, err);
+    console.log(`[ClaudeCode] 'which claude' failed`);
   }
 
   // Not found
-  console.error("[ClaudeCode] CLI not found in any common location");
-  throw new Error("Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code");
+  console.error("[ClaudeCode] CLI not found. Checked:", checkedPaths);
+  throw new Error(`CLI not found. HOME=${home}. Checked: ${checkedPaths.slice(0, 3).join(", ")}`);
+}
+
+/** Get the last checked paths for error reporting */
+export function getCheckedPaths(): string[] {
+  return checkedPaths;
+}
+
+/** Get home directory for error reporting */
+export function getHomeDir(): string {
+  return homedir();
 }
 
 export interface ClaudeCodeConfig {
@@ -151,8 +165,9 @@ export async function streamClaudeCodeResponse(
         claudePath = getClaudeCliPath();
         console.log(`[ClaudeCode] Using CLI at: ${claudePath}`);
       } catch (err) {
-        console.error("[ClaudeCode] Failed to find claude CLI:", err);
-        safeCallback(callbacks.onFailed)(new Error("Claude CLI not found"));
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error("[ClaudeCode] Failed to find claude CLI:", errMsg);
+        safeCallback(callbacks.onFailed)(new Error(errMsg));
         resolve();
         return;
       }
