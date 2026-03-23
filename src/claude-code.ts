@@ -152,6 +152,8 @@ async function streamViaRelay(
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      // Required for ngrok free tier to skip browser interstitial
+      "ngrok-skip-browser-warning": "true",
     };
     if (config.relayToken) {
       headers["Authorization"] = `Bearer ${config.relayToken}`;
