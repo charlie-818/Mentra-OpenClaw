@@ -19,14 +19,17 @@ import { createServer, IncomingMessage, ServerResponse } from "http";
 import { spawn } from "child_process";
 import { homedir } from "os";
 import { existsSync, realpathSync } from "fs";
+import { dirname } from "path";
 
 const PORT = parseInt(process.env.CLAUDE_RELAY_PORT || "3456", 10);
 const AUTH_TOKEN = process.env.CLAUDE_RELAY_TOKEN || "";
 
-/** Get full PATH for spawning commands */
+/** Get full PATH for spawning commands (must include node's directory) */
 function getFullPath(): string {
   const home = homedir();
+  const nodeBinDir = dirname(process.execPath);
   const extraPaths = [
+    nodeBinDir, // Critical: node must be in PATH for shebang to work
     `${home}/.npm-packages/bin`,
     `${home}/.bun/bin`,
     "/usr/local/bin",
