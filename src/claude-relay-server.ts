@@ -18,12 +18,36 @@
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { spawn } from "child_process";
 import { homedir } from "os";
-import { existsSync } from "fs";
+import { existsSync, realpathSync } from "fs";
 
 const PORT = parseInt(process.env.CLAUDE_RELAY_PORT || "3456", 10);
 const AUTH_TOKEN = process.env.CLAUDE_RELAY_TOKEN || "";
 
-/** Find claude CLI path */
+/** Find claude CLI path and return [executable, args] for spawn */
+function getClaudeCommand(): [string, string[]] {
+  const home = homedir();
+  const paths = [
+    `${home}/.npm-packages/bin/claude`,
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+    `${home}/.local/bin/claude`,
+    `${home}/.bun/bin/claude`,
+  ];
+
+  for (const p of paths) {
+    if (existsSync(p)) {
+      // Use node directly to avoid shebang/env issues
+      const nodePath = process.execPath; // Current node binary
+      const realPath = realpathSync(p);
+      console.log(`[Relay] Found CLI at ${p} -> ${realPath}`);
+      return [nodePath, [realPath]];
+    }
+  }
+
+  throw new Error("Claude CLI not found");
+}
+
+/** Find claude CLI path (for health check) */
 function getClaudeCliPath(): string {
   const home = homedir();
   const paths = [
@@ -88,18 +112,27 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
   });
 
   try {
-    const claudePath = getClaudeCliPath();
+    const [executable, baseArgs] = getClaudeCommand();
+    const args = [...baseArgs, "-p", query];
+    console.log(`[Relay] Spawning: ${executable} ${args.join(" ").slice(0, 80)}...`);
+
     // Remove ANTHROPIC_API_KEY so Claude uses Max subscription instead of API credits
     const env = { ...process.env };
     delete env.ANTHROPIC_API_KEY;
 
-    const child = spawn(claudePath, ["-p", query], {
+    const child = spawn(executable, args, {
       cwd: workingDir || process.cwd(),
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
     child.stdin?.end();
+
+    child.on("error", (err) => {
+      console.error(`[Relay] Spawn error: ${err.message}`);
+      res.write(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
+      res.end();
+    });
 
     child.stdout?.on("data", (data: Buffer) => {
       const chunk = data.toString();
