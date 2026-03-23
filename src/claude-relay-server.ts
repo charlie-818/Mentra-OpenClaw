@@ -17,6 +17,7 @@
 
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { spawn } from "child_process";
+import { existsSync } from "fs";
 import {
   getFullPath,
   getClaudeCliPath,
@@ -88,8 +89,15 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
     // Build environment with extended PATH and no API key
     const env = buildSpawnEnv();
 
+    // Validate workingDir exists locally, otherwise use process.cwd()
+    // Railway sends "/app" which doesn't exist on local Mac
+    const cwd = workingDir && existsSync(workingDir) ? workingDir : process.cwd();
+    if (workingDir && workingDir !== cwd) {
+      console.log(`[Relay] workingDir "${workingDir}" not found, using "${cwd}"`);
+    }
+
     const child = spawn(claudePath, ["-p", query], {
-      cwd: workingDir || process.cwd(),
+      cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
