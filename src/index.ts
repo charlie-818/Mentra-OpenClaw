@@ -575,8 +575,10 @@ class OpenClawBridgeServer extends AppServer {
     /** Check if text is a clear command */
     const isClearCommand = (text: string): boolean => {
       const s = text.trim().toLowerCase();
+      // Remove punctuation for more forgiving matching
+      const clean = s.replace(/[.,!?]/g, "");
       const clears = getClearWords();
-      return clears.some((c) => s === c || s.endsWith(" " + c));
+      return clears.some((c) => clean === c || clean.endsWith(" " + c));
     };
 
     /** Check if text is a "hey" command to show dashboard */
