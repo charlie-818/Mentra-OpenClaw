@@ -89,9 +89,10 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
     // Build environment with extended PATH and no API key
     const env = buildSpawnEnv();
 
-    // Validate workingDir exists locally, otherwise use process.cwd()
+    // Validate workingDir exists locally, otherwise use home directory
     // Railway sends "/app" which doesn't exist on local Mac
-    const cwd = workingDir && existsSync(workingDir) ? workingDir : process.cwd();
+    const defaultCwd = "/Users/charliebc";
+    const cwd = workingDir && existsSync(workingDir) ? workingDir : defaultCwd;
     if (workingDir && workingDir !== cwd) {
       console.log(`[Relay] workingDir "${workingDir}" not found, using "${cwd}"`);
     }
