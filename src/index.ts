@@ -924,6 +924,21 @@ class OpenClawBridgeServer extends AppServer {
         return;
       }
 
+      // Check for AI mode switch commands - works in any state, doesn't transcribe
+      const aiModeCmd = getAIModeVoiceCommand(text);
+      if (aiModeCmd !== null && data.isFinal) {
+        if (aiModeCmd === "toggle") {
+          entry.aiMode = entry.aiMode === "openclaw" ? "claude" : "openclaw";
+        } else {
+          entry.aiMode = aiModeCmd;
+        }
+        const modeName = entry.aiMode === "claude" ? "Code" : "Open";
+        showDisplay(`${modeName} mode.`, { durationMs: 2000 });
+        session.logger.info(`[AIMode] Switched to ${entry.aiMode} mode`);
+        setTimeout(showDashboard, 2000);
+        return;
+      }
+
       // Ignore other transcription while idle (welcome showing), sending, or streaming
       if (state === SessionState.IDLE || state === SessionState.SENDING || state === SessionState.STREAMING) {
         return;
@@ -990,21 +1005,6 @@ class OpenClawBridgeServer extends AppServer {
           `Copilot ${entry.copilot ? "on" : "off"}.`,
           { durationMs: 2000 }
         );
-        setTimeout(showDashboard, 2000);
-        return;
-      }
-
-      // Check for AI mode voice command (claude mode / openclaw mode / switch mode)
-      const aiModeCmd = getAIModeVoiceCommand(text);
-      if (aiModeCmd !== null) {
-        if (aiModeCmd === "toggle") {
-          entry.aiMode = entry.aiMode === "openclaw" ? "claude" : "openclaw";
-        } else {
-          entry.aiMode = aiModeCmd;
-        }
-        const modeName = entry.aiMode === "claude" ? "Claude" : "OpenClaw";
-        showDisplay(`${modeName} mode.`, { durationMs: 2000 });
-        session.logger.info(`[AIMode] Switched to ${entry.aiMode} mode`);
         setTimeout(showDashboard, 2000);
         return;
       }
