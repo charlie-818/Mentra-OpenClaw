@@ -17,45 +17,16 @@
 
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { spawn } from "child_process";
-import { homedir } from "os";
-import { existsSync, realpathSync } from "fs";
-import { dirname } from "path";
+import {
+  getFullPath,
+  getClaudeCliPath,
+  buildSpawnEnv,
+  runSpawnPreflight,
+  formatPreflightReport,
+} from "./relay-utils.js";
 
 const PORT = parseInt(process.env.CLAUDE_RELAY_PORT || "3456", 10);
 const AUTH_TOKEN = process.env.CLAUDE_RELAY_TOKEN || "";
-
-/** Get full PATH for spawning commands (must include node's directory) */
-function getFullPath(): string {
-  const home = homedir();
-  const nodeBinDir = dirname(process.execPath);
-  const extraPaths = [
-    nodeBinDir, // Critical: node must be in PATH for shebang to work
-    `${home}/.npm-packages/bin`,
-    `${home}/.bun/bin`,
-    "/usr/local/bin",
-    "/opt/homebrew/bin",
-    `${home}/.local/bin`,
-  ];
-  return [...extraPaths, process.env.PATH || ""].join(":");
-}
-
-/** Find claude CLI path (for health check) */
-function getClaudeCliPath(): string {
-  const home = homedir();
-  const paths = [
-    `${home}/.npm-packages/bin/claude`,
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude",
-    `${home}/.local/bin/claude`,
-    `${home}/.bun/bin/claude`,
-  ];
-
-  for (const p of paths) {
-    if (existsSync(p)) return p;
-  }
-
-  throw new Error("Claude CLI not found");
-}
 
 /** Handle streaming Claude Code request */
 async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -104,12 +75,18 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
   });
 
   try {
+    // Run preflight checks
+    const preflight = runSpawnPreflight();
+    if (!preflight.canSpawn) {
+      console.error("[Relay] Preflight failed:");
+      console.error(formatPreflightReport(preflight));
+    }
+
     const claudePath = getClaudeCliPath();
     console.log(`[Relay] Using CLI: ${claudePath}`);
 
     // Build environment with extended PATH and no API key
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: getFullPath() };
-    delete env.ANTHROPIC_API_KEY;
+    const env = buildSpawnEnv();
 
     const child = spawn(claudePath, ["-p", query], {
       cwd: workingDir || process.cwd(),
@@ -134,6 +111,11 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
 
     child.on("error", (err) => {
       console.error(`[Relay] Spawn error: ${err.message}`);
+      // Log detailed diagnostics on spawn error
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        console.error("[Relay] ENOENT error - running diagnostics:");
+        console.error(formatPreflightReport(runSpawnPreflight()));
+      }
       safeWrite(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
       safeEnd();
     });
@@ -175,13 +157,26 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
 
 /** Health check endpoint */
 function handleHealth(res: ServerResponse): void {
-  try {
-    getClaudeCliPath();
+  const preflight = runSpawnPreflight();
+  if (preflight.canSpawn) {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, cli: "found" }));
-  } catch (err) {
+    res.end(
+      JSON.stringify({
+        ok: true,
+        cli: preflight.cli.path,
+        nodeInPath: preflight.nodeInPath,
+      })
+    );
+  } else {
     res.writeHead(503, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, error: "CLI not found" }));
+    res.end(
+      JSON.stringify({
+        ok: false,
+        issues: preflight.issues,
+        cli: preflight.cli.path,
+        nodeInPath: preflight.nodeInPath,
+      })
+    );
   }
 }
 
