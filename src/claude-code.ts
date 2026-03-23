@@ -211,14 +211,14 @@ async function streamViaRelay(
               console.log(`[ClaudeCode] Stream completed`);
               safeCallback(callbacks.onDone)();
               safeCallback(callbacks.onCompleted)();
+              return; // Successfully completed
             } else if (data.type === "error") {
-              console.error(`[ClaudeCode] Relay error: ${data.error}`);
-              throw new Error(data.error || "Relay error");
+              const errMsg = data.error || "Relay error";
+              console.error(`[ClaudeCode] Relay error: ${errMsg}`);
+              safeCallback(callbacks.onFailed)(new Error(errMsg));
+              return; // Error handled
             }
           } catch (parseErr) {
-            if (parseErr instanceof Error && parseErr.message.includes("Relay error")) {
-              throw parseErr;
-            }
             console.warn(`[ClaudeCode] SSE parse error: ${parseErr}`);
           }
         }
