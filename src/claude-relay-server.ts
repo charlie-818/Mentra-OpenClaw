@@ -105,7 +105,7 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
     console.log(`[Relay] Using CLI: ${claudePath}`);
 
     // Build environment with extended PATH and no API key
-    const env = { ...process.env, PATH: getFullPath() };
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: getFullPath() };
     delete env.ANTHROPIC_API_KEY;
 
     const child = spawn(claudePath, ["-p", query], {
