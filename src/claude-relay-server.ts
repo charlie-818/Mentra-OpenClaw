@@ -97,7 +97,12 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
       console.log(`[Relay] workingDir "${workingDir}" not found, using "${cwd}"`);
     }
 
-    const child = spawn(claudePath, ["-p", query], {
+    // Allow full filesystem access with --add-dir / and bypass permissions
+    const child = spawn(claudePath, [
+      "-p", query,
+      "--add-dir", "/",
+      "--dangerously-skip-permissions"
+    ], {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
