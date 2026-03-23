@@ -665,8 +665,8 @@ class OpenClawBridgeServer extends AppServer {
 
       if (!display) return; // Nothing to show
 
-      // Use ScrollView for proper wrapping and scrolling
-      transcriptView.setContent(`${getStatusLine()}\n${DIVIDER}\n${display}`, { breakMode: 'strict-word' });
+      // Use ScrollView for proper wrapping and scrolling - no status line during transcription
+      transcriptView.setContent(display, { breakMode: 'strict-word' });
       transcriptView.scrollToBottom();
       displayTranscriptView();
     };
