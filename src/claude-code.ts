@@ -2,10 +2,14 @@
  * Claude Code CLI client: Subprocess-based streaming for interactive queries.
  * Uses `claude --print [query]` and streams stdout chunks via callbacks.
  *
- * NOTE: Claude Code mode only works when the server runs LOCALLY because:
- * 1. It spawns the `claude` CLI which must be installed locally
- * 2. It uses Max subscription auth from `claude login`
- * 3. It needs access to local files for code assistance
+ * Two modes of operation:
+ * 1. LOCAL: Spawns `claude` CLI directly (requires local server)
+ * 2. RELAY: Connects to a remote relay server via CLAUDE_RELAY_URL
+ *
+ * For Railway deployment, run the relay server locally and expose via tunnel:
+ *   npx tsx src/claude-relay-server.ts
+ *   ngrok http 3456
+ *   # Set CLAUDE_RELAY_URL=https://xxx.ngrok.io in Railway
  */
 
 import { execSync } from "child_process";
@@ -102,6 +106,10 @@ export interface ClaudeCodeConfig {
   apiKey: string;
   model?: string;
   workingDirectory?: string;
+  /** Relay server URL (e.g., https://xxx.ngrok.io). If set, uses HTTP relay instead of local CLI. */
+  relayUrl?: string;
+  /** Auth token for relay server */
+  relayToken?: string;
 }
 
 export interface ClaudeCodeCallbacks {
@@ -114,18 +122,100 @@ export interface ClaudeCodeCallbacks {
 /**
  * Load Claude Code config from environment.
  * Returns config even without API key (CLI can use Max subscription auth).
+ *
+ * For relay mode (Railway deployment), set:
+ *   CLAUDE_RELAY_URL=https://xxx.ngrok.io
+ *   CLAUDE_RELAY_TOKEN=your_secret_token (optional but recommended)
  */
 export function getClaudeCodeConfigFromEnv(): ClaudeCodeConfig {
   return {
     apiKey: process.env.ANTHROPIC_API_KEY || "",
     model: process.env.CLAUDE_CODE_MODEL || "claude-sonnet-4-20250514",
     workingDirectory: process.env.CLAUDE_CODE_WORKING_DIR || process.cwd(),
+    relayUrl: process.env.CLAUDE_RELAY_URL,
+    relayToken: process.env.CLAUDE_RELAY_TOKEN,
   };
 }
 
 /**
- * Stream Claude Code response via subprocess.
- * Spawns `claude --print [query]` and streams stdout chunks via callbacks.
+ * Stream Claude Code response via relay server (SSE).
+ */
+async function streamViaRelay(
+  config: ClaudeCodeConfig,
+  userMessage: string,
+  callbacks: ClaudeCodeCallbacks,
+  safeCallback: <T extends unknown[]>(fn: ((...args: T) => void) | undefined) => (...args: T) => void
+): Promise<void> {
+  const relayUrl = config.relayUrl!;
+  console.log(`[ClaudeCode] Using relay: ${relayUrl}`);
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (config.relayToken) {
+      headers["Authorization"] = `Bearer ${config.relayToken}`;
+    }
+
+    const response = await fetch(`${relayUrl}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query: userMessage,
+        workingDir: config.workingDirectory,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Relay error ${response.status}: ${text}`);
+    }
+
+    if (!response.body) {
+      throw new Error("No response body from relay");
+    }
+
+    // Parse SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === "delta" && data.text) {
+              safeCallback(callbacks.onDelta)(data.text);
+            } else if (data.type === "done") {
+              safeCallback(callbacks.onDone)();
+              safeCallback(callbacks.onCompleted)();
+            } else if (data.type === "error") {
+              throw new Error(data.error || "Relay error");
+            }
+          } catch (parseErr) {
+            // Skip malformed SSE lines
+          }
+        }
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[ClaudeCode] Relay error: ${message}`);
+    safeCallback(callbacks.onFailed)(new Error(message));
+  }
+}
+
+/**
+ * Stream Claude Code response via subprocess or relay.
+ * If CLAUDE_RELAY_URL is set, uses HTTP relay; otherwise spawns local CLI.
  */
 export async function streamClaudeCodeResponse(
   config: ClaudeCodeConfig,
@@ -159,12 +249,18 @@ export async function streamClaudeCodeResponse(
       return;
     }
 
-    // Check if running in container - Claude Code only works locally
+    // Use relay if configured (for Railway/cloud deployment)
+    if (config.relayUrl) {
+      await streamViaRelay(config, userMessage, callbacks, safeCallback);
+      return;
+    }
+
+    // Check if running in container - Claude Code only works locally without relay
     if (isRunningInContainer()) {
       const home = homedir();
-      console.error(`[ClaudeCode] Running in container (HOME=${home}). Claude Code requires local server.`);
+      console.error(`[ClaudeCode] Running in container (HOME=${home}). Set CLAUDE_RELAY_URL or use local server.`);
       safeCallback(callbacks.onFailed)(
-        new Error("Code mode requires local server. Say 'open' for cloud mode.")
+        new Error("Code mode requires relay or local server. Say 'open' for cloud mode.")
       );
       return;
     }
