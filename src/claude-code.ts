@@ -4,6 +4,8 @@
  */
 
 import { execSync } from "child_process";
+import { existsSync } from "fs";
+import { homedir } from "os";
 
 /** Cache the resolved claude CLI path */
 let claudeCliPath: string | null = null;
@@ -14,37 +16,51 @@ let claudeCliPath: string | null = null;
 function getClaudeCliPath(): string {
   if (claudeCliPath) return claudeCliPath;
 
+  const home = homedir();
+  console.log(`[ClaudeCode] Looking for CLI, HOME=${home}`);
+
   // Common installation paths
   const commonPaths = [
-    process.env.HOME + "/.npm-packages/bin/claude",
+    `${home}/.npm-packages/bin/claude`,
+    `${home}/.nvm/versions/node/*/bin/claude`, // NVM installations
     "/usr/local/bin/claude",
     "/opt/homebrew/bin/claude",
-    process.env.HOME + "/.local/bin/claude",
+    `${home}/.local/bin/claude`,
+    `${home}/.bun/bin/claude`,
   ];
 
   // Check common paths first
-  const { existsSync } = require("fs");
   for (const p of commonPaths) {
+    // Skip glob patterns
+    if (p.includes("*")) continue;
+    console.log(`[ClaudeCode] Checking: ${p}`);
     if (existsSync(p)) {
+      console.log(`[ClaudeCode] Found at: ${p}`);
       claudeCliPath = p;
       return p;
     }
   }
 
-  // Fall back to `which` command
+  // Fall back to `which` command with full PATH
   try {
-    const result = execSync("which claude", { encoding: "utf-8" }).trim();
+    const shellPath = process.env.PATH || "/usr/local/bin:/usr/bin:/bin";
+    const extendedPath = `${home}/.npm-packages/bin:${home}/.bun/bin:/opt/homebrew/bin:${shellPath}`;
+    const result = execSync("which claude", {
+      encoding: "utf-8",
+      env: { ...process.env, PATH: extendedPath }
+    }).trim();
     if (result) {
+      console.log(`[ClaudeCode] Found via which: ${result}`);
       claudeCliPath = result;
       return result;
     }
-  } catch {
-    // which failed
+  } catch (err) {
+    console.log(`[ClaudeCode] which command failed:`, err);
   }
 
-  // Last resort: hope it's in PATH
-  claudeCliPath = "claude";
-  return "claude";
+  // Not found
+  console.error("[ClaudeCode] CLI not found in any common location");
+  throw new Error("Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code");
 }
 
 export interface ClaudeCodeConfig {
