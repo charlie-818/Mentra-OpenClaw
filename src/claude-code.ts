@@ -159,6 +159,7 @@ async function streamViaRelay(
       headers["Authorization"] = `Bearer ${config.relayToken}`;
     }
 
+    console.log(`[ClaudeCode] Fetching relay: ${relayUrl}/query`);
     const response = await fetch(`${relayUrl}/query`, {
       method: "POST",
       headers,
@@ -168,9 +169,12 @@ async function streamViaRelay(
       }),
     });
 
+    console.log(`[ClaudeCode] Relay response status: ${response.status}`);
+
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Relay error ${response.status}: ${text}`);
+      console.error(`[ClaudeCode] Relay error response: ${text.slice(0, 200)}`);
+      throw new Error(`Relay error ${response.status}: ${text.slice(0, 100)}`);
     }
 
     if (!response.body) {
@@ -178,14 +182,20 @@ async function streamViaRelay(
     }
 
     // Parse SSE stream
+    console.log(`[ClaudeCode] Starting SSE stream parsing`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let chunkCount = 0;
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.log(`[ClaudeCode] SSE stream done, received ${chunkCount} chunks`);
+        break;
+      }
 
+      chunkCount++;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -195,15 +205,21 @@ async function streamViaRelay(
           try {
             const data = JSON.parse(line.slice(6));
             if (data.type === "delta" && data.text) {
+              console.log(`[ClaudeCode] Delta: "${data.text.slice(0, 50)}..."`);
               safeCallback(callbacks.onDelta)(data.text);
             } else if (data.type === "done") {
+              console.log(`[ClaudeCode] Stream completed`);
               safeCallback(callbacks.onDone)();
               safeCallback(callbacks.onCompleted)();
             } else if (data.type === "error") {
+              console.error(`[ClaudeCode] Relay error: ${data.error}`);
               throw new Error(data.error || "Relay error");
             }
           } catch (parseErr) {
-            // Skip malformed SSE lines
+            if (parseErr instanceof Error && parseErr.message.includes("Relay error")) {
+              throw parseErr;
+            }
+            console.warn(`[ClaudeCode] SSE parse error: ${parseErr}`);
           }
         }
       }
