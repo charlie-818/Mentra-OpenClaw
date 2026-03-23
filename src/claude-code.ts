@@ -1,11 +1,32 @@
 /**
  * Claude Code CLI client: Subprocess-based streaming for interactive queries.
  * Uses `claude --print [query]` and streams stdout chunks via callbacks.
+ *
+ * NOTE: Claude Code mode only works when the server runs LOCALLY because:
+ * 1. It spawns the `claude` CLI which must be installed locally
+ * 2. It uses Max subscription auth from `claude login`
+ * 3. It needs access to local files for code assistance
  */
 
 import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { homedir } from "os";
+
+/**
+ * Check if running in a container/cloud environment
+ */
+function isRunningInContainer(): boolean {
+  const home = homedir();
+  // Common indicators of container/cloud environments
+  return (
+    home === "/root" ||
+    home === "/" ||
+    existsSync("/.dockerenv") ||
+    process.env.RAILWAY_ENVIRONMENT !== undefined ||
+    process.env.KUBERNETES_SERVICE_HOST !== undefined ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME !== undefined
+  );
+}
 
 /** Cache the resolved claude CLI path */
 let claudeCliPath: string | null = null;
@@ -135,6 +156,16 @@ export async function streamClaudeCodeResponse(
       }
       safeCallback(callbacks.onDone)();
       safeCallback(callbacks.onCompleted)();
+      return;
+    }
+
+    // Check if running in container - Claude Code only works locally
+    if (isRunningInContainer()) {
+      const home = homedir();
+      console.error(`[ClaudeCode] Running in container (HOME=${home}). Claude Code requires local server.`);
+      safeCallback(callbacks.onFailed)(
+        new Error("Code mode requires local server. Say 'open' for cloud mode.")
+      );
       return;
     }
 
