@@ -3,6 +3,50 @@
  * Uses `claude --print [query]` and streams stdout chunks via callbacks.
  */
 
+import { execSync } from "child_process";
+
+/** Cache the resolved claude CLI path */
+let claudeCliPath: string | null = null;
+
+/**
+ * Find the claude CLI path. Checks common locations and uses `which` as fallback.
+ */
+function getClaudeCliPath(): string {
+  if (claudeCliPath) return claudeCliPath;
+
+  // Common installation paths
+  const commonPaths = [
+    process.env.HOME + "/.npm-packages/bin/claude",
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+    process.env.HOME + "/.local/bin/claude",
+  ];
+
+  // Check common paths first
+  const { existsSync } = require("fs");
+  for (const p of commonPaths) {
+    if (existsSync(p)) {
+      claudeCliPath = p;
+      return p;
+    }
+  }
+
+  // Fall back to `which` command
+  try {
+    const result = execSync("which claude", { encoding: "utf-8" }).trim();
+    if (result) {
+      claudeCliPath = result;
+      return result;
+    }
+  } catch {
+    // which failed
+  }
+
+  // Last resort: hope it's in PATH
+  claudeCliPath = "claude";
+  return "claude";
+}
+
 export interface ClaudeCodeConfig {
   apiKey: string;
   model?: string;
@@ -81,7 +125,10 @@ export async function streamClaudeCodeResponse(
       env.ANTHROPIC_API_KEY = config.apiKey;
     }
 
-    const child = spawn("claude", args, {
+    const claudePath = getClaudeCliPath();
+    console.log(`[ClaudeCode] Using CLI at: ${claudePath}`);
+
+    const child = spawn(claudePath, args, {
       cwd: workDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],

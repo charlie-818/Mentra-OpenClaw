@@ -1216,6 +1216,20 @@ app.get("/mirror/state", (_req, res) => {
   res.json(getMirrorState());
 });
 
+// Test endpoint to simulate mirror updates (for debugging)
+app.post("/mirror/test", (req, res) => {
+  const { content, state } = req.body ?? {};
+  const testSessionId = "test-session";
+  registerMirrorSession(testSessionId);
+  if (state) {
+    updateMirrorSessionState(testSessionId, state, false);
+  }
+  if (content) {
+    updateMirrorDisplay(testSessionId, content);
+  }
+  res.json({ ok: true, state: getMirrorState() });
+});
+
 app.get("/mirror", (_req, res) => {
   const url = new URL("../public/mirror.html", import.meta.url);
   res.sendFile(url.pathname);
