@@ -582,7 +582,9 @@ class OpenClawBridgeServer extends AppServer {
     /** Check if text is a "hey" command to show dashboard */
     const isHeyCommand = (text: string): boolean => {
       const s = text.trim().toLowerCase();
-      return s === "hey" || s.startsWith("hey ") || s.endsWith(" hey");
+      // Remove punctuation for more forgiving matching
+      const clean = s.replace(/[.,!?]/g, "");
+      return clean === "hey" || clean.startsWith("hey ") || clean.endsWith(" hey") || s.includes(" hey ");
     };
 
     /** Check for copilot voice command; returns "on" | "off" | "toggle" | null */
