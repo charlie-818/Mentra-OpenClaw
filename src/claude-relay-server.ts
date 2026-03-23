@@ -89,9 +89,13 @@ async function handleQuery(req: IncomingMessage, res: ServerResponse): Promise<v
 
   try {
     const claudePath = getClaudeCliPath();
+    // Remove ANTHROPIC_API_KEY so Claude uses Max subscription instead of API credits
+    const env = { ...process.env };
+    delete env.ANTHROPIC_API_KEY;
+
     const child = spawn(claudePath, ["-p", query], {
       cwd: workingDir || process.cwd(),
-      env: process.env,
+      env,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
